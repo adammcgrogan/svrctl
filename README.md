@@ -3,16 +3,7 @@
 A CLI for running local Minecraft servers — create, start, stop, and watch
 them without hand-managing jars, Java versions, or `screen` sessions.
 
-```
-$ svrctl
- svrctl  2 servers
-
-  NAME       TYPE      VERSION   STATUS      UPTIME
-› survival   paper     1.21.4    ● running   1h 30m
-  creative   vanilla   1.21.1    ○ stopped   —
-
-  ↑↓ select  s start  x stop  r restart  c console  l logs  d remove  n new  q quit
-```
+![svrctl's dashboard, listing two servers — one running, one stopped — with the key hints for starting, stopping, restarting, attaching to console or logs, removing, and creating a server](docs/dashboard.png)
 
 Run `svrctl` with no arguments to open that dashboard. Everything below also
 works as a plain command, for scripts and muscle memory.
