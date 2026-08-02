@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -74,5 +75,80 @@ func TestVanillaUnknownVersion(t *testing.T) {
 
 	if _, err := (Vanilla{}).ResolveDownloadURL("99.99"); err == nil {
 		t.Errorf("expected error for unknown version")
+	}
+}
+
+// newFakeMojangManifest serves a manifest containing a mix of releases and
+// snapshots, for exercising ListVersions.
+func withMixedMojangManifest(t *testing.T) {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"latest": map[string]string{"release": "1.21.4"},
+			"versions": []map[string]string{
+				{"id": "1.21.5-pre1", "type": "snapshot", "url": "http://x/1"},
+				{"id": "1.21.4", "type": "release", "url": "http://x/2"},
+				{"id": "24w01a", "type": "snapshot", "url": "http://x/3"},
+				{"id": "1.21.1", "type": "release", "url": "http://x/4"},
+				{"id": "b1.7.3", "type": "old_beta", "url": "http://x/5"},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	orig := mojangManifestURL
+	mojangManifestURL = srv.URL + "/manifest.json"
+	t.Cleanup(func() { mojangManifestURL = orig })
+}
+
+func TestVanillaListVersionsReturnsReleasesNewestFirst(t *testing.T) {
+	withMixedMojangManifest(t)
+
+	got, err := Vanilla{}.ListVersions()
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+	// Snapshots and betas are noise for someone standing up a server; the
+	// manifest's own order is newest-first and is preserved.
+	want := []string{"1.21.4", "1.21.1"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestManifestIsFetchedOncePerURL(t *testing.T) {
+	var hits int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		json.NewEncoder(w).Encode(map[string]any{
+			"versions": []map[string]string{
+				{"id": "1.21.1", "type": "release", "url": "http://example.invalid/v"},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	orig := mojangManifestURL
+	mojangManifestURL = srv.URL + "/manifest.json"
+	t.Cleanup(func() { mojangManifestURL = orig })
+
+	// Creating a server asks for the version list, the jar URL, and the Java
+	// requirement. That used to mean re-downloading the manifest each time.
+	for i := 0; i < 3; i++ {
+		if _, err := (Vanilla{}).ListVersions(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("manifest fetched %d times, want 1", got)
 	}
 }

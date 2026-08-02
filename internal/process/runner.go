@@ -29,11 +29,14 @@ func Run(opts RunOptions) error {
 		return fmt.Errorf("server.jar not found in %s: %w", opts.ServerDir, err)
 	}
 
-	logDir := filepath.Join(opts.ServerDir, "logs")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	// Capture the child's stdio to our own file, not logs/latest.log: the
+	// server writes that one itself, and two writers truncating and appending
+	// to the same path produced a log where every line appeared twice, in two
+	// different formats, interleaved unpredictably.
+	if err := os.MkdirAll(runStateDir(opts.ServerDir), 0o755); err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(filepath.Join(logDir, "latest.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	logFile, err := os.OpenFile(ConsoleLogPath(opts.ServerDir), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}

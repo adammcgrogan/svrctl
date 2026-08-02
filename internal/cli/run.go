@@ -19,7 +19,9 @@ func newHiddenRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			javaPath, err := resolveJavaPath(s)
+			// The runner is detached with no terminal to draw on; by the time
+			// it starts, `svrctl start` has already ensured the JDK anyway.
+			javaPath, err := resolveJavaPath(s, nil)
 			if err != nil {
 				return err
 			}

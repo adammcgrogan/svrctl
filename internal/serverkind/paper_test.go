@@ -68,3 +68,67 @@ func TestPaperRequiredJavaMajorDelegatesToVanilla(t *testing.T) {
 		t.Errorf("got %d, want 21", got)
 	}
 }
+
+func TestPaperListVersionsFlattensGroupsNewestFirst(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// The API groups versions under minor keys, and JSON objects have no
+		// order, so the ordering has to be reconstructed.
+		json.NewEncoder(w).Encode(map[string]any{
+			"versions": map[string][]string{
+				"1.20": {"1.20.6", "1.20.1"},
+				"1.21": {"1.21.4", "1.21.4-rc1", "1.21.1"},
+				"1.8":  {"1.8.8"},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	orig := paperAPIBase
+	paperAPIBase = srv.URL
+	t.Cleanup(func() { paperAPIBase = orig })
+
+	got, err := Paper{}.ListVersions()
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+
+	want := []string{"1.21.4", "1.21.1", "1.20.6", "1.20.1", "1.8.8"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestCompareVersionsOrdersNumerically(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want string // "newer", "older", or "same"
+	}{
+		{"1.21", "1.20", "newer"},
+		{"1.9", "1.10", "older"},  // lexical sorting gets this one wrong
+		{"26.2", "1.21", "newer"}, // the version numbering scheme changed
+		{"1.21", "1.21", "same"},
+		{"1.21.1", "1.21", "newer"},
+	}
+	for _, c := range cases {
+		got := compareVersions(c.a, c.b)
+		var label string
+		switch {
+		case got > 0:
+			label = "newer"
+		case got < 0:
+			label = "older"
+		default:
+			label = "same"
+		}
+		if label != c.want {
+			t.Errorf("compareVersions(%q, %q) says %s, want %s", c.a, c.b, label, c.want)
+		}
+	}
+}

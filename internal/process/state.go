@@ -23,6 +23,14 @@ func runStatePath(serverDir string) string {
 	return filepath.Join(runStateDir(serverDir), "run.json")
 }
 
+// ConsoleLogPath is where the runner records everything the server process
+// wrote to stdout and stderr. It deliberately sits outside logs/, which the
+// server owns, and it captures the JVM-level output — bad jars, out-of-memory
+// kills — that dies before the server's own logging ever starts.
+func ConsoleLogPath(serverDir string) string {
+	return filepath.Join(runStateDir(serverDir), "console.log")
+}
+
 func writeRunState(serverDir string, st RunState) error {
 	if err := os.MkdirAll(runStateDir(serverDir), 0o755); err != nil {
 		return err

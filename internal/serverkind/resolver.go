@@ -10,4 +10,8 @@ type Resolver interface {
 	// RequiredJavaMajor returns the Java major version (e.g. 21) needed to run
 	// the given Minecraft version.
 	RequiredJavaMajor(version string) (int, error)
+	// ListVersions returns the Minecraft versions this flavor publishes a
+	// server for, newest first, so callers can offer a choice instead of
+	// making the user guess a version string.
+	ListVersions() ([]string, error)
 }

@@ -9,12 +9,16 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/adammcgrogan/svrctl/internal/fetch"
 	"github.com/adammcgrogan/svrctl/internal/paths"
 )
 
 // EnsureJDK returns the path to a "java" binary for the given major version,
 // downloading and caching the JDK from Adoptium if it isn't already cached.
-func EnsureJDK(major int) (string, error) {
+//
+// report, which may be nil, receives download progress. A first-run JDK fetch
+// is a few hundred megabytes, so callers should always show it to the user.
+func EnsureJDK(major int, report fetch.Reporter) (string, error) {
 	dir, err := paths.JDKDir(major)
 	if err != nil {
 		return "", err
@@ -24,7 +28,10 @@ func EnsureJDK(major int) (string, error) {
 		return bin, nil
 	}
 
-	if err := downloadAndExtractJDK(major, dir); err != nil {
+	if err := downloadAndExtractJDK(major, dir, report); err != nil {
+		// A partial extraction would look like a usable cached JDK on the next
+		// run, so clear it out rather than leave a broken install behind.
+		os.RemoveAll(dir)
 		return "", err
 	}
 

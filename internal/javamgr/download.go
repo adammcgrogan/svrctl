@@ -4,9 +4,10 @@ package javamgr
 
 import (
 	"fmt"
-	"net/http"
 	"runtime"
 	"strconv"
+
+	"github.com/adammcgrogan/svrctl/internal/fetch"
 )
 
 // adoptiumBinaryURL is a var (not const) so tests can point it at a fake server.
@@ -36,7 +37,7 @@ func adoptiumArch() (string, error) {
 	}
 }
 
-func downloadAndExtractJDK(major int, destDir string) error {
+func downloadAndExtractJDK(major int, destDir string, report fetch.Reporter) error {
 	osName, err := adoptiumOS()
 	if err != nil {
 		return err
@@ -45,21 +46,27 @@ func downloadAndExtractJDK(major int, destDir string) error {
 	if err != nil {
 		return err
 	}
+	// Temurin never shipped a native macOS/arm64 build for JDK 8; fall back
+	// to the x64 build, which runs fine on Apple Silicon under Rosetta.
+	if major == 8 && osName == "mac" && archName == "aarch64" {
+		archName = "x64"
+	}
 
 	url := fmt.Sprintf("%s/%s/ga/%s/%s/jdk/hotspot/normal/eclipse",
 		adoptiumBinaryURL, strconv.Itoa(major), osName, archName)
 
-	resp, err := http.Get(url)
+	body, total, err := fetch.Open(url)
 	if err != nil {
 		return fmt.Errorf("downloading JDK %d: %w", major, err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("downloading JDK %d: unexpected status %s", major, resp.Status)
-	}
+	defer body.Close()
+
+	// The archive is extracted as it streams, so progress tracks bytes pulled
+	// off the wire rather than files written — which is what the wait is.
+	src := fetch.Reader(body, total, report)
 
 	if osName == "windows" {
-		return extractZip(resp.Body, destDir)
+		return extractZip(src, destDir)
 	}
-	return extractTarGz(resp.Body, destDir)
+	return extractTarGz(src, destDir)
 }

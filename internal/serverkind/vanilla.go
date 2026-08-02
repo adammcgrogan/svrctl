@@ -13,9 +13,13 @@ var mojangManifestURL = "https://launchermeta.mojang.com/mc/game/version_manifes
 type Vanilla struct{}
 
 type manifest struct {
+	Latest struct {
+		Release string `json:"release"`
+	} `json:"latest"`
 	Versions []struct {
-		ID  string `json:"id"`
-		URL string `json:"url"`
+		ID   string `json:"id"`
+		Type string `json:"type"`
+		URL  string `json:"url"`
 	} `json:"versions"`
 }
 
@@ -30,16 +34,37 @@ type versionMeta struct {
 	} `json:"javaVersion"`
 }
 
-func fetchVersionMeta(version string) (*versionMeta, error) {
-	resp, err := http.Get(mojangManifestURL)
+// getJSON fetches and decodes a JSON document into a fresh T.
+func getJSON[T any](url string) (*T, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %s", resp.Status)
+	}
+	var out T
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func fetchManifest() (*manifest, error) {
+	m, err := fetchOnce(mojangManifestURL, func() (*manifest, error) {
+		return getJSON[manifest](mojangManifestURL)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetching version manifest: %w", err)
 	}
-	defer resp.Body.Close()
+	return m, nil
+}
 
-	var m manifest
-	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-		return nil, fmt.Errorf("parsing version manifest: %w", err)
+func fetchVersionMeta(version string) (*versionMeta, error) {
+	m, err := fetchManifest()
+	if err != nil {
+		return nil, err
 	}
 
 	var versionURL string
@@ -53,17 +78,13 @@ func fetchVersionMeta(version string) (*versionMeta, error) {
 		return nil, fmt.Errorf("minecraft version %q not found in manifest", version)
 	}
 
-	vResp, err := http.Get(versionURL)
+	vm, err := fetchOnce(versionURL, func() (*versionMeta, error) {
+		return getJSON[versionMeta](versionURL)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetching version metadata: %w", err)
 	}
-	defer vResp.Body.Close()
-
-	var vm versionMeta
-	if err := json.NewDecoder(vResp.Body).Decode(&vm); err != nil {
-		return nil, fmt.Errorf("parsing version metadata: %w", err)
-	}
-	return &vm, nil
+	return vm, nil
 }
 
 func (Vanilla) ResolveDownloadURL(version string) (string, error) {
@@ -86,4 +107,24 @@ func (Vanilla) RequiredJavaMajor(version string) (int, error) {
 		return 0, fmt.Errorf("no java version metadata for minecraft version %q", version)
 	}
 	return vm.JavaVersion.MajorVersion, nil
+}
+
+// ListVersions returns Mojang's released versions, newest first. Snapshots and
+// pre-releases are filtered out: they are rarely what someone spinning up a
+// server wants, and including them buries the versions that are.
+func (Vanilla) ListVersions() ([]string, error) {
+	m, err := fetchManifest()
+	if err != nil {
+		return nil, err
+	}
+	versions := make([]string, 0, len(m.Versions))
+	for _, v := range m.Versions {
+		if v.Type == "release" {
+			versions = append(versions, v.ID)
+		}
+	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("no released versions found in manifest")
+	}
+	return versions, nil
 }
