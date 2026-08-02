@@ -225,47 +225,29 @@ func TestDashboardRemoveUnregisterNeedsNoTypedName(t *testing.T) {
 	}
 }
 
-func TestDashboardRemovePurgeRequiresTypedName(t *testing.T) {
+func TestDashboardRemovePurgeRunsOnSelection(t *testing.T) {
+	var removed string
 	var purged bool
 	deps := DashboardDeps{
 		List:   func() ([]ServerRow, error) { return testRows(), nil },
-		Remove: func(name string, purge bool) error { purged = purge; return nil },
+		Remove: func(name string, purge bool) error { removed, purged = name, purge; return nil },
 	}
 
-	// Typing the wrong name refuses, with nothing sent to Remove.
-	m := press(newTestDashboard(deps), "d", "p")
-	if !m.purging {
-		t.Fatal("expected the dashboard to be waiting on a typed name")
-	}
-	m = press(m, "n", "o", "p", "e")
-	next, _ := m.Update(key("enter"))
+	m := press(newTestDashboard(deps), "d")
+	next, cmd := m.Update(key("p"))
 	m = next.(dashboardModel)
-	if m.purging {
-		t.Error("purge state should have cleared after enter")
+	if m.confirming {
+		t.Error("confirm state should have cleared once a mode was chosen")
 	}
-	if !strings.Contains(m.failure, "did not match") {
-		t.Errorf("got failure %q, want a name-mismatch message", m.failure)
-	}
-	if purged {
-		t.Error("Remove should not have been called with a wrong name")
-	}
-
-	// Typing the right name runs the purge.
-	m = press(newTestDashboard(deps), "d", "p")
-	for _, r := range "creative" {
-		next, _ := m.Update(key(string(r)))
-		m = next.(dashboardModel)
-	}
-	next, cmd := m.Update(key("enter"))
-	m = next.(dashboardModel)
 	if cmd == nil {
 		t.Fatal("expected a command to run the removal")
 	}
+
 	next, _ = m.Update(cmd())
 	m = next.(dashboardModel)
 
-	if !purged {
-		t.Error("expected Remove to be called with purge=true")
+	if removed != "creative" || !purged {
+		t.Errorf("got removed=%q purged=%v, want creative/true", removed, purged)
 	}
 	if !strings.Contains(m.status, "removed creative") {
 		t.Errorf("got status %q, want it to mention the removal", m.status)
@@ -278,13 +260,6 @@ func TestDashboardRemoveConfirmCanBeCancelled(t *testing.T) {
 	m = next.(dashboardModel)
 	if m.confirming {
 		t.Error("esc should have cancelled the confirm step")
-	}
-
-	m = press(newTestDashboard(DashboardDeps{}), "d", "p")
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = next.(dashboardModel)
-	if m.purging {
-		t.Error("esc should have cancelled the purge step")
 	}
 }
 

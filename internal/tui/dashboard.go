@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/adammcgrogan/svrctl/internal/ui"
@@ -95,13 +94,11 @@ type dashboardModel struct {
 	status  string
 	failure string
 
-	// confirming asks which of the two remove modes the user means; purging
-	// then requires the server's name typed out, so a single keystroke can
-	// never destroy a world. Both stay inside this program rather than
-	// handing back an Action, since neither needs the whole terminal.
+	// confirming asks which of the two remove modes the user means, so a
+	// single keystroke can never destroy a world by accident — it stays
+	// inside this program rather than handing back an Action, since it does
+	// not need the whole terminal.
 	confirming bool
-	purging    bool
-	purgeInput textinput.Model
 
 	width, height int
 	outcome       Outcome
@@ -195,9 +192,6 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.busy != "" {
 		return m, nil
 	}
-	if m.purging {
-		return m.handlePurgeKey(msg)
-	}
 	if m.confirming {
 		return m.handleConfirmKey(msg)
 	}
@@ -272,10 +266,8 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleConfirmKey asks which of the two remove modes the user means.
-// Unregistering is reversible — the server can be re-added — so it needs no
-// further confirmation; purging is not, so it drops into handlePurgeKey
-// instead of running immediately.
+// handleConfirmKey asks which of the two remove modes the user means, then
+// runs it directly — choosing a mode is itself the confirmation.
 func (m dashboardModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	current, hasCurrent := m.current()
 	switch msg.String() {
@@ -292,46 +284,13 @@ func (m dashboardModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.confirming = false
-		m.purging = true
-		ti := textinput.New()
-		ti.Placeholder = current.Name
-		ti.Prompt = ui.Running.Render(ui.GlyphPrompt + " ")
-		ti.CharLimit = 64
-		ti.Focus()
-		m.purgeInput = ti
-		return m, textinput.Blink
+		m.busy = "removing " + current.Name
+		return m, m.runRemove(current.Name, true)
 
 	case "esc", "ctrl+c":
 		m.confirming = false
 	}
 	return m, nil
-}
-
-// handlePurgeKey requires the server's name typed out, not just "y", since
-// this is the one dashboard action that permanently deletes a world.
-func (m dashboardModel) handlePurgeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
-		m.purging = false
-		return m, nil
-
-	case tea.KeyEnter:
-		current, hasCurrent := m.current()
-		m.purging = false
-		if !hasCurrent {
-			return m, nil
-		}
-		if strings.TrimSpace(m.purgeInput.Value()) != current.Name {
-			m.failure = "names did not match, so nothing was deleted"
-			return m, nil
-		}
-		m.busy = "removing " + current.Name
-		return m, m.runRemove(current.Name, true)
-	}
-
-	var cmd tea.Cmd
-	m.purgeInput, cmd = m.purgeInput.Update(msg)
-	return m, cmd
 }
 
 func (m dashboardModel) current() (ServerRow, bool) {
@@ -357,10 +316,6 @@ func (m dashboardModel) View() string {
 	b.WriteString(m.table())
 	b.WriteString("\n")
 
-	if m.purging {
-		b.WriteString(m.purgeView())
-		return b.String()
-	}
 	if m.confirming {
 		b.WriteString(m.confirmView())
 		return b.String()
@@ -402,17 +357,6 @@ func (m dashboardModel) confirmView() string {
 		"p", "purge, delete files",
 		"esc", "cancel",
 	) + "\n")
-	return b.String()
-}
-
-// purgeView requires the server's name typed out before anything is deleted.
-func (m dashboardModel) purgeView() string {
-	current, _ := m.current()
-	var b strings.Builder
-	b.WriteString(" " + ui.Warning.Render("This permanently deletes "+current.Path) + "\n")
-	b.WriteString(" " + ui.Subtle.Render("Worlds, configs, and plugins in that directory all go with it.") + "\n\n")
-	b.WriteString(" " + ui.Body.Render("Type "+current.Name+" to confirm: ") + m.purgeInput.View() + "\n")
-	b.WriteString("\n " + ui.HelpBar("enter", "confirm", "esc", "cancel") + "\n")
 	return b.String()
 }
 
