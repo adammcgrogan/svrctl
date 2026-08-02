@@ -43,6 +43,7 @@ const (
 	ActionQuit Action = iota
 	ActionConsole
 	ActionCreate
+	ActionLogs
 )
 
 // Outcome is the dashboard's exit result.
@@ -257,6 +258,13 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.outcome = Outcome{Action: ActionConsole, Server: current.Name}
 		return m, tea.Quit
 
+	case "l":
+		if !hasCurrent {
+			break
+		}
+		m.outcome = Outcome{Action: ActionLogs, Server: current.Name}
+		return m, tea.Quit
+
 	case "d":
 		if !hasCurrent {
 			break
@@ -338,6 +346,7 @@ func (m dashboardModel) View() string {
 		"x", "stop",
 		"r", "restart",
 		"c", "console",
+		"l", "logs",
 		"d", "remove",
 		"n", "new",
 		"q", "quit",

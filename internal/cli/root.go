@@ -109,6 +109,10 @@ func runDashboard() error {
 			if err := attachConsole(next.Server); err != nil {
 				reportError(err)
 			}
+		case tui.ActionLogs:
+			if err := attachLogs(next.Server); err != nil {
+				reportError(err)
+			}
 		case tui.ActionCreate:
 			if err := runCreateWizard(os.Stdout, ProvisionSpec{}); err != nil {
 				reportError(err)

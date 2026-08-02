@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/adammcgrogan/svrctl/internal/process"
+	"github.com/adammcgrogan/svrctl/internal/tui"
 	"github.com/adammcgrogan/svrctl/internal/ui"
 )
 
@@ -89,11 +90,24 @@ func printTail(out io.Writer, f *os.File, n int) error {
 		_, err := io.Copy(out, f)
 		return err
 	}
+	lines, err := tailLines(f, n)
+	if err != nil {
+		return fmt.Errorf("reading log file: %w", err)
+	}
+	for _, line := range lines {
+		fmt.Fprintln(out, colorizeLog(line))
+	}
+	return nil
+}
 
-	// Server logs are small enough (they rotate per run) to scan in one pass
-	// rather than seeking backwards for line breaks.
+// tailLines returns the last n lines read from r, leaving it positioned at
+// EOF so a caller reading the same underlying file next — a follower,
+// typically — picks up from where this left off. Server logs are small
+// enough (they rotate per run) to scan in one pass rather than seeking
+// backwards for line breaks.
+func tailLines(r io.Reader, n int) ([]string, error) {
 	var ring []string
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		ring = append(ring, scanner.Text())
@@ -101,13 +115,70 @@ func printTail(out io.Writer, f *os.File, n int) error {
 			ring = ring[1:]
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	return ring, scanner.Err()
+}
+
+// logFollower is an io.ReadCloser that behaves like `tail -f`: reads block
+// (via a short poll) rather than returning EOF once caught up, so a Scanner
+// reading it doesn't have to poll itself. Closing it stops the poll and
+// releases the file.
+type logFollower struct {
+	f    *os.File
+	done chan struct{}
+}
+
+func (r *logFollower) Read(p []byte) (int, error) {
+	for {
+		n, err := r.f.Read(p)
+		if n > 0 {
+			return n, nil
+		}
+		if err != nil && err != io.EOF {
+			return n, err
+		}
+		select {
+		case <-r.done:
+			return 0, io.EOF
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+}
+
+func (r *logFollower) Close() error {
+	close(r.done)
+	return r.f.Close()
+}
+
+// attachLogs opens a read-only, scrollable view of a server's log, following
+// new output as it arrives. Unlike attachConsole this works whether or not
+// the server is running, since it reads the log file rather than a live
+// control connection.
+func attachLogs(name string) error {
+	v, err := viewServer(name)
+	if err != nil {
+		return err
+	}
+	logPath, ok := logFileFor(v.Server.Path)
+	if !ok {
+		return fmt.Errorf("%q has no logs yet — it has not been started", name)
+	}
+
+	f, err := os.Open(logPath)
+	if err != nil {
+		return fmt.Errorf("opening log file: %w", err)
+	}
+	seed, err := tailLines(f, defaultLogLines)
+	if err != nil {
+		f.Close()
 		return fmt.Errorf("reading log file: %w", err)
 	}
-	for _, line := range ring {
-		fmt.Fprintln(out, colorizeLog(line))
-	}
-	return nil
+
+	return tui.RunLogs(tui.LogsOptions{
+		Name:   name,
+		Detail: fmt.Sprintf("%s %s · port %d", v.Server.Type, v.Server.Version, v.port()),
+		Seed:   seed,
+		Follow: &logFollower{f: f, done: make(chan struct{})},
+	})
 }
 
 // followLog streams appended output until interrupted.

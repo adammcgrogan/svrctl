@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/adammcgrogan/svrctl/internal/process"
 )
@@ -114,5 +115,88 @@ func TestPrintTailZeroMeansWholeFile(t *testing.T) {
 	}
 	if got := out.String(); got != "one\ntwo\nthree\n" {
 		t.Errorf("got %q, want the whole file", got)
+	}
+}
+
+func TestLogFollowerBlocksThenReadsAppendedData(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log")
+	writeLog(t, path, "one\n")
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tailLines(f, 10); err != nil {
+		t.Fatal(err)
+	}
+
+	follower := &logFollower{f: f, done: make(chan struct{})}
+	defer follower.Close()
+
+	// Nothing new yet: Read must block rather than reporting EOF, since a
+	// stopped follow would otherwise look like the log had ended.
+	readDone := make(chan struct{})
+	go func() {
+		buf := make([]byte, 64)
+		n, err := follower.Read(buf)
+		if err != nil {
+			t.Errorf("Read returned an error instead of blocking: %v", err)
+		}
+		if got := string(buf[:n]); got != "two\n" {
+			t.Errorf("got %q, want the appended line", got)
+		}
+		close(readDone)
+	}()
+
+	select {
+	case <-readDone:
+		t.Fatal("Read returned before there was anything new to read")
+	default:
+	}
+
+	appended, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appended.WriteString("two\n"); err != nil {
+		t.Fatal(err)
+	}
+	appended.Close()
+
+	<-readDone
+}
+
+func TestLogFollowerCloseUnblocksRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log")
+	writeLog(t, path, "")
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	follower := &logFollower{f: f, done: make(chan struct{})}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := follower.Read(make([]byte, 64))
+		done <- err
+	}()
+
+	follower.Close()
+
+	// Read must unblock promptly once closed. Whether it reports io.EOF or a
+	// "file already closed" from a Read that was in flight when Close ran the
+	// underlying os.File.Close doesn't matter — the scanner reading it treats
+	// any error as the end of the stream.
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("expected an error once closed, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Read did not unblock after Close")
 	}
 }

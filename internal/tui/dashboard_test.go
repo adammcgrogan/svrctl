@@ -179,6 +179,30 @@ func TestDashboardCursorStaysInBounds(t *testing.T) {
 	}
 }
 
+func TestDashboardLogsWorkOnAStoppedServer(t *testing.T) {
+	// Cursor starts on "creative", which is stopped — unlike console, logs
+	// should not be blocked by that.
+	m := press(newTestDashboard(DashboardDeps{}), "l")
+
+	if m.outcome.Action != ActionLogs {
+		t.Fatalf("got action %v, want ActionLogs", m.outcome.Action)
+	}
+	if m.outcome.Server != "creative" {
+		t.Errorf("got server %q, want creative", m.outcome.Server)
+	}
+}
+
+func TestDashboardLogsWorkOnARunningServer(t *testing.T) {
+	m := press(newTestDashboard(DashboardDeps{}), "down", "l")
+
+	if m.outcome.Action != ActionLogs {
+		t.Fatalf("got action %v, want ActionLogs", m.outcome.Action)
+	}
+	if m.outcome.Server != "survival" {
+		t.Errorf("got server %q, want survival", m.outcome.Server)
+	}
+}
+
 func TestDashboardRemoveOffersBothModes(t *testing.T) {
 	m := press(newTestDashboard(DashboardDeps{}), "d")
 
