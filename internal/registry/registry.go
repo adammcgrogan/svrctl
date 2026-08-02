@@ -1,5 +1,5 @@
-// Package registry manages the servers.yaml file that tracks every server
-// svrctl knows about: its type, version, filesystem path, and launch settings.
+// Package registry loads, saves, and queries the servers.yaml file that
+// tracks every server svrctl knows about.
 package registry
 
 import (
@@ -8,15 +8,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
-
-// Server describes one registered Minecraft server.
-type Server struct {
-	Type    string `yaml:"type"`   // "vanilla" or "paper"
-	Version string `yaml:"version"`
-	Path    string `yaml:"path"`
-	Port    int    `yaml:"port,omitempty"`
-	Memory  string `yaml:"memory,omitempty"`
-}
 
 // Registry is the top-level servers.yaml document.
 type Registry struct {
@@ -32,6 +23,7 @@ func Load(path string) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading registry: %w", err)
 	}
+
 	var reg Registry
 	if err := yaml.Unmarshal(data, &reg); err != nil {
 		return nil, fmt.Errorf("parsing registry: %w", err)

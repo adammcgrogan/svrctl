@@ -1,3 +1,4 @@
+// Vanilla resolves official Mojang server jars via the launcher version manifest.
 package serverkind
 
 import (

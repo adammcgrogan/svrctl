@@ -1,3 +1,5 @@
+// Paper resolves PaperMC server jar builds via the PaperMC "Fill" v3 API
+// (api.papermc.io's older v2 API was sunset; fill.papermc.io is its replacement).
 package serverkind
 
 import (
@@ -7,20 +9,19 @@ import (
 )
 
 // paperAPIBase is a var (not const) so tests can point it at a fake server.
-var paperAPIBase = "https://api.papermc.io/v2/projects/paper"
+var paperAPIBase = "https://fill.papermc.io/v3/projects/paper"
 
 type Paper struct{}
 
-type paperBuildsResponse struct {
-	Builds []struct {
-		Build     int    `json:"build"`
-		Channel   string `json:"channel"`
-		Downloads struct {
-			Application struct {
-				Name string `json:"name"`
-			} `json:"application"`
-		} `json:"downloads"`
-	} `json:"builds"`
+// paperBuild is one entry in the array returned by
+// GET {paperAPIBase}/versions/{version}/builds, which is sorted newest-first.
+type paperBuild struct {
+	ID        int    `json:"id"`
+	Channel   string `json:"channel"`
+	Downloads map[string]struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	} `json:"downloads"`
 }
 
 func (Paper) ResolveDownloadURL(version string) (string, error) {
@@ -30,25 +31,29 @@ func (Paper) ResolveDownloadURL(version string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	var br paperBuildsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&br); err != nil {
+	var builds []paperBuild
+	if err := json.NewDecoder(resp.Body).Decode(&builds); err != nil {
 		return "", fmt.Errorf("parsing paper builds: %w", err)
 	}
-	if len(br.Builds) == 0 {
+	if len(builds) == 0 {
 		return "", fmt.Errorf("no paper builds found for minecraft version %q", version)
 	}
 
-	// Prefer the latest "default" channel build; fall back to the latest build overall.
-	best := br.Builds[len(br.Builds)-1]
-	for i := len(br.Builds) - 1; i >= 0; i-- {
-		if br.Builds[i].Channel == "default" {
-			best = br.Builds[i]
+	// Builds are sorted newest-first; prefer the newest STABLE build, falling
+	// back to the newest build of any channel if none is marked stable.
+	best := builds[0]
+	for _, b := range builds {
+		if b.Channel == "STABLE" {
+			best = b
 			break
 		}
 	}
 
-	return fmt.Sprintf("%s/versions/%s/builds/%d/downloads/%s",
-		paperAPIBase, version, best.Build, best.Downloads.Application.Name), nil
+	dl, ok := best.Downloads["server:default"]
+	if !ok {
+		return "", fmt.Errorf("paper build %d for %q has no server download", best.ID, version)
+	}
+	return dl.URL, nil
 }
 
 func (Paper) RequiredJavaMajor(version string) (int, error) {
