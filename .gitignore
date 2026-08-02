@@ -1,0 +1,4 @@
+/svrctl
+/dist/
+*.log
+.DS_Store
