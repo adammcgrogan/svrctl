@@ -30,7 +30,7 @@ func newRemoveCmd() *cobra.Command {
 			name := args[0]
 			out := cmd.OutOrStdout()
 
-			reg, regPath, err := loadRegistry()
+			reg, _, err := loadRegistry()
 			if err != nil {
 				return err
 			}
@@ -54,14 +54,10 @@ func newRemoveCmd() *cobra.Command {
 				}
 			}
 
-			reg.Remove(name)
-			if err := reg.Save(regPath); err != nil {
+			if err := removeServer(name, purge); err != nil {
 				return err
 			}
 			if purge {
-				if err := os.RemoveAll(s.Path); err != nil {
-					return fmt.Errorf("deleting server files: %w", err)
-				}
 				ui.Okf(out, "Removed %s and deleted its files", ui.Strong.Render(name))
 				return nil
 			}
@@ -75,6 +71,36 @@ func newRemoveCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&purge, "purge", false, "also delete the server's files, including its worlds")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the confirmation prompt for --purge")
 	return cmd
+}
+
+// removeServer unregisters a server and, if purge is set, deletes its files.
+// It re-checks existence and running state itself rather than trusting a
+// caller's earlier look, since the dashboard's confirmation step leaves a
+// window for the server to have started or vanished in the meantime.
+func removeServer(name string, purge bool) error {
+	reg, regPath, err := loadRegistry()
+	if err != nil {
+		return err
+	}
+	s, ok := reg.Get(name)
+	if !ok {
+		return unknownServerError(reg, name)
+	}
+	v := buildView(name, s)
+	if v.running() {
+		return fmt.Errorf("%q is running — stop it first with `svrctl stop %s`", name, name)
+	}
+
+	reg.Remove(name)
+	if err := reg.Save(regPath); err != nil {
+		return err
+	}
+	if purge {
+		if err := os.RemoveAll(s.Path); err != nil {
+			return fmt.Errorf("deleting server files: %w", err)
+		}
+	}
+	return nil
 }
 
 // confirmPurge requires the user to type the server's name, not just "y".

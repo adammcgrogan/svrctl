@@ -17,6 +17,7 @@ func dashboardDeps() tui.DashboardDeps {
 		Start:   func(name string) error { return startServer(io.Discard, name) },
 		Stop:    stopServer,
 		Restart: func(name string) error { return restartServer(io.Discard, name) },
+		Remove:  removeServer,
 	}
 }
 
