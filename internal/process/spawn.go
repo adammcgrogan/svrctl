@@ -17,6 +17,10 @@ func Spawn(serverDir, name string) error {
 		return err
 	}
 
+	// Clear out any error left by a previous failed attempt so it isn't
+	// mistaken for this one.
+	clearRunError(serverDir)
+
 	cmd := exec.Command(self, "__run", name)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
@@ -34,7 +38,13 @@ func Spawn(serverDir, name string) error {
 		if _, ok := IsRunning(serverDir); ok {
 			return nil
 		}
+		if msg, ok := readRunError(serverDir); ok {
+			return fmt.Errorf("server failed to start: %s", msg)
+		}
 		time.Sleep(200 * time.Millisecond)
+	}
+	if msg, ok := readRunError(serverDir); ok {
+		return fmt.Errorf("server failed to start: %s", msg)
 	}
 	return fmt.Errorf("timed out waiting for server to start")
 }

@@ -23,13 +23,18 @@ func newHiddenRunCmd() *cobra.Command {
 			// it starts, `svrctl start` has already ensured the JDK anyway.
 			javaPath, err := resolveJavaPath(s, nil)
 			if err != nil {
+				process.WriteRunError(s.Path, err)
 				return err
 			}
-			return process.Run(process.RunOptions{
+			if err := process.Run(process.RunOptions{
 				ServerDir: s.Path,
 				JavaPath:  javaPath,
 				Memory:    s.Memory,
-			})
+			}); err != nil {
+				process.WriteRunError(s.Path, err)
+				return err
+			}
+			return nil
 		},
 	}
 	return cmd
