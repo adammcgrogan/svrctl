@@ -15,13 +15,14 @@ import (
 func newEditCmd() *cobra.Command {
 	var memory string
 	var port int
+	var group string
 
 	cmd := &cobra.Command{
 		Use:   "edit <name>",
-		Short: "Change a server's memory or port",
-		Long: "Updates the memory allocation and/or port svrctl runs a server with.\n" +
-			"A running server needs a restart before the change takes effect.",
-		Example:           "  svrctl edit survival --memory 8G\n  svrctl edit survival --port 25570",
+		Short: "Change a server's memory, port, or group",
+		Long: "Updates the memory allocation, port, and/or group svrctl runs a server with.\n" +
+			"A running server needs a restart before memory/port changes take effect.",
+		Example:           "  svrctl edit survival --memory 8G\n  svrctl edit survival --port 25570\n  svrctl edit survival --group network",
 		Args:              requireArgs(1),
 		ValidArgsFunction: completeServerNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -30,8 +31,9 @@ func newEditCmd() *cobra.Command {
 
 			memoryChanged := cmd.Flags().Changed("memory")
 			portChanged := cmd.Flags().Changed("port")
-			if !memoryChanged && !portChanged {
-				return fmt.Errorf("nothing to change — pass --memory and/or --port")
+			groupChanged := cmd.Flags().Changed("group")
+			if !memoryChanged && !portChanged && !groupChanged {
+				return fmt.Errorf("nothing to change — pass --memory, --port, and/or --group")
 			}
 
 			regPath, err := paths.RegistryFile()
@@ -51,6 +53,9 @@ func newEditCmd() *cobra.Command {
 				}
 				if portChanged {
 					s.Port = port
+				}
+				if groupChanged {
+					s.Group = group
 				}
 				reg.Put(name, s)
 				return nil
@@ -75,5 +80,6 @@ func newEditCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&memory, "memory", "", "JVM heap size, e.g. 4G")
 	cmd.Flags().IntVar(&port, "port", 0, "port to listen on")
+	cmd.Flags().StringVar(&group, "group", "", "tag this server so start/stop/restart --group can act on it with others (empty string clears it)")
 	return cmd
 }

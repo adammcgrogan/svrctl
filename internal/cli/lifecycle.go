@@ -21,97 +21,149 @@ const defaultStopTimeout = 30 * time.Second
 
 func newStartCmd() *cobra.Command {
 	var attach bool
+	var group string
 
 	cmd := &cobra.Command{
-		Use:               "start <name>",
-		Short:             "Start a server in the background",
-		Example:           "  svrctl start survival\n  svrctl start survival --attach",
-		Args:              requireArgs(1),
+		Use:   "start <name>",
+		Short: "Start a server in the background",
+		Long: "Starts a server in the background.\n\n" +
+			"Pass --group instead of a name to start every server tagged with it.",
+		Example:           "  svrctl start survival\n  svrctl start survival --attach\n  svrctl start --group network",
+		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeServerNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			names, err := targetNames(args, group)
+			if err != nil {
+				return err
+			}
 			out := cmd.OutOrStdout()
 
-			s, err := resolveServer(name)
-			if err != nil {
-				return err
-			}
-			if _, ok := process.IsRunning(s.Path); ok {
-				return fmt.Errorf("%q is already running (run `svrctl console %s` to attach)", name, name)
+			runOne := func(name string) error {
+				s, err := resolveServer(name)
+				if err != nil {
+					return err
+				}
+				if _, ok := process.IsRunning(s.Path); ok {
+					return fmt.Errorf("%q is already running (run `svrctl console %s` to attach)", name, name)
+				}
+
+				javaPath, err := ensureJava(out, s)
+				if err != nil {
+					return err
+				}
+				if attach {
+					return runAttached(s.Path, javaPath, s.Memory)
+				}
+				if err := process.Spawn(s.Path, name); err != nil {
+					return err
+				}
+
+				ui.Okf(out, "Started %s", ui.Strong.Render(name))
+				ui.Hintf(out, "svrctl console %s", name)
+				return nil
 			}
 
-			javaPath, err := ensureJava(out, s)
-			if err != nil {
-				return err
+			if len(names) == 1 {
+				return runOne(names[0])
 			}
 			if attach {
-				return runAttached(s.Path, javaPath, s.Memory)
+				return fmt.Errorf("--attach only works for a single server, not --group")
 			}
-			if err := process.Spawn(s.Path, name); err != nil {
-				return err
-			}
-
-			ui.Okf(out, "Started %s", ui.Strong.Render(name))
-			ui.Hintf(out, "svrctl console %s", name)
-			return nil
+			return forEachTarget(names, runOne)
 		},
 	}
 
 	cmd.Flags().BoolVar(&attach, "attach", false, "run in the foreground, tied to this terminal (stops when you do)")
+	cmd.Flags().StringVar(&group, "group", "", "start every server in this group instead of one by name")
 	return cmd
 }
 
 func newStopCmd() *cobra.Command {
 	var force bool
 	var timeout time.Duration
+	var group string
 
 	cmd := &cobra.Command{
-		Use:               "stop <name>",
-		Short:             "Stop a running server",
-		Args:              requireArgs(1),
+		Use:   "stop <name>",
+		Short: "Stop a running server",
+		Long: "Stops a running server.\n\n" +
+			"Pass --group instead of a name to stop every server tagged with it.",
+		Example:           "  svrctl stop survival\n  svrctl stop --group network",
+		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeServerNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			v, err := viewServer(name)
+			names, err := targetNames(args, group)
 			if err != nil {
 				return err
 			}
-			if !v.running() {
-				ui.Warnf(cmd.OutOrStdout(), "%s is already stopped", name)
+			out := cmd.OutOrStdout()
+
+			runOne := func(name string) error {
+				v, err := viewServer(name)
+				if err != nil {
+					return err
+				}
+				if !v.running() {
+					ui.Warnf(out, "%s is already stopped", name)
+					return nil
+				}
+				if !force {
+					ui.Stepf(out, "Asking %s to save and shut down…", name)
+				}
+				if err := process.Stop(v.Server.Path, timeout, force); err != nil {
+					return err
+				}
+				ui.Okf(out, "Stopped %s", ui.Strong.Render(name))
 				return nil
 			}
-			if !force {
-				ui.Stepf(cmd.OutOrStdout(), "Asking %s to save and shut down…", name)
+
+			if len(names) == 1 {
+				return runOne(names[0])
 			}
-			if err := process.Stop(v.Server.Path, timeout, force); err != nil {
-				return err
-			}
-			ui.Okf(cmd.OutOrStdout(), "Stopped %s", ui.Strong.Render(name))
-			return nil
+			return forEachTarget(names, runOne)
 		},
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "kill it immediately, without letting it save first")
 	cmd.Flags().DurationVar(&timeout, "timeout", defaultStopTimeout, "how long to wait for a graceful shutdown")
+	cmd.Flags().StringVar(&group, "group", "", "stop every server in this group instead of one by name")
 	return cmd
 }
 
 func newRestartCmd() *cobra.Command {
+	var group string
+
 	cmd := &cobra.Command{
-		Use:               "restart <name>",
-		Short:             "Stop and start a server",
-		Args:              requireArgs(1),
+		Use:   "restart <name>",
+		Short: "Stop and start a server",
+		Long: "Stops and starts a server.\n\n" +
+			"Pass --group instead of a name to restart every server tagged with it.",
+		Example:           "  svrctl restart survival\n  svrctl restart --group network",
+		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeServerNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			out := cmd.OutOrStdout()
-			if err := restartServer(out, name); err != nil {
+			names, err := targetNames(args, group)
+			if err != nil {
 				return err
 			}
-			ui.Okf(out, "Restarted %s", ui.Strong.Render(name))
-			return nil
+			out := cmd.OutOrStdout()
+
+			runOne := func(name string) error {
+				if err := restartServer(out, name); err != nil {
+					return err
+				}
+				ui.Okf(out, "Restarted %s", ui.Strong.Render(name))
+				return nil
+			}
+
+			if len(names) == 1 {
+				return runOne(names[0])
+			}
+			return forEachTarget(names, runOne)
 		},
 	}
+
+	cmd.Flags().StringVar(&group, "group", "", "restart every server in this group instead of one by name")
 	return cmd
 }
 

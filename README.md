@@ -45,6 +45,10 @@ you through picking a type, a real published version, memory, and a port.
 | `svrctl start <name>` | Start a server in the background (`--attach` to stay in the foreground) |
 | `svrctl stop <name>` | Stop a running server (`--force` to kill it, `--timeout` to adjust the grace period) |
 | `svrctl restart <name>` | Stop and start it |
+
+`start`, `stop`, `restart`, `list`, and `status` all take `--group <name>` instead of a
+server name, to act on every server tagged with `svrctl create --group`/`svrctl edit
+--group` at once — handy for a proxy plus its backend servers.
 | `svrctl console <name>` | Attach to a running server's console, scrollback and all |
 | `svrctl cmd <name> <command...>` | Send one command without attaching |
 | `svrctl logs <name>` | Show recent output (`-f` to follow, `-n` for how much) |

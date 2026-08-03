@@ -72,6 +72,7 @@ func newCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&spec.Path, "path", "", "server directory (default ~/mcservers/<name>)")
 	cmd.Flags().IntVar(&spec.Port, "port", 0, "port to listen on (default 25565)")
 	cmd.Flags().StringVar(&spec.Memory, "memory", "", "JVM heap size, e.g. 4G")
+	cmd.Flags().StringVar(&spec.Group, "group", "", "tag this server so `svrctl start/stop/restart --group` can act on it with others")
 	cmd.Flags().BoolVar(&acceptEULA, "accept-eula", false, "accept Mojang's EULA ("+EULAURL+")")
 
 	cmd.RegisterFlagCompletionFunc("type", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/adammcgrogan/svrctl/internal/paths"
@@ -81,6 +82,52 @@ func editDistance(a, b string) int {
 		prev, curr = curr, prev
 	}
 	return prev[len(b)]
+}
+
+// targetNames resolves which servers a lifecycle/status command should act
+// on: either the single name argument, or every server tagged with the given
+// group. Exactly one of the two must be supplied.
+func targetNames(args []string, group string) ([]string, error) {
+	if group != "" {
+		if len(args) > 0 {
+			return nil, fmt.Errorf("pass a server name or --group, not both")
+		}
+		views, err := viewAll()
+		if err != nil {
+			return nil, err
+		}
+		var names []string
+		for _, v := range views {
+			if v.Server.Group == group {
+				names = append(names, v.Name)
+			}
+		}
+		if len(names) == 0 {
+			return nil, fmt.Errorf("no servers in group %q", group)
+		}
+		return names, nil
+	}
+	if len(args) != 1 {
+		return nil, fmt.Errorf("specify a server name, or --group <name> to act on a whole group")
+	}
+	return args, nil
+}
+
+// forEachTarget runs action for every name and collects the failures rather
+// than stopping at the first one, so one bad server in a --group doesn't
+// block the rest. It still returns a non-nil error if anything failed, so
+// scripts see a non-zero exit code.
+func forEachTarget(names []string, action func(name string) error) error {
+	var failed []string
+	for _, name := range names {
+		if err := action(name); err != nil {
+			failed = append(failed, fmt.Sprintf("%s: %v", name, err))
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d server(s) failed:\n  %s", len(failed), len(names), strings.Join(failed, "\n  "))
+	}
+	return nil
 }
 
 // serverNames returns every registered name, sorted. Used by shell completion.

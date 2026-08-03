@@ -8,4 +8,5 @@ type Server struct {
 	Path    string `yaml:"path"`
 	Port    int    `yaml:"port,omitempty"`
 	Memory  string `yaml:"memory,omitempty"`
+	Group   string `yaml:"group,omitempty"` // optional tag for operating on several servers at once
 }

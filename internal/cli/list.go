@@ -14,6 +14,7 @@ import (
 
 func newListCmd() *cobra.Command {
 	var asJSON bool
+	var group string
 
 	cmd := &cobra.Command{
 		Use:     "list",
@@ -24,6 +25,9 @@ func newListCmd() *cobra.Command {
 			views, err := viewAll()
 			if err != nil {
 				return err
+			}
+			if group != "" {
+				views = filterByGroup(views, group)
 			}
 			out := cmd.OutOrStdout()
 
@@ -41,7 +45,19 @@ func newListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print machine-readable JSON instead of a table")
+	cmd.Flags().StringVar(&group, "group", "", "only list servers in this group")
 	return cmd
+}
+
+// filterByGroup keeps only the views tagged with group.
+func filterByGroup(views []serverView, group string) []serverView {
+	out := views[:0]
+	for _, v := range views {
+		if v.Server.Group == group {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func newStatusCmd() *cobra.Command {
@@ -72,6 +88,9 @@ func newStatusCmd() *cobra.Command {
 			if v.Server.Memory != "" {
 				ui.Field(out, "Memory", v.Server.Memory)
 			}
+			if v.Server.Group != "" {
+				ui.Field(out, "Group", v.Server.Group)
+			}
 			ui.Field(out, "Location", v.Server.Path)
 			if v.running() {
 				ui.Field(out, "PID", fmt.Sprintf("%d", v.State.PID))
@@ -96,29 +115,40 @@ func newStatusCmd() *cobra.Command {
 // printServerTable renders the listing. Running servers are pulled out of the
 // list visually so a glance answers "what's up right now?".
 func printServerTable(out io.Writer, views []serverView) {
-	nameW, typeW, verW := 4, 4, 7 // the header labels
+	nameW, typeW, verW, groupW := 4, 4, 7, 5 // the header labels
+	showGroup := false
 	for _, v := range views {
 		nameW = max(nameW, ui.TextWidth(v.Name))
 		typeW = max(typeW, ui.TextWidth(v.Server.Type))
 		verW = max(verW, ui.TextWidth(v.Server.Version))
+		if v.Server.Group != "" {
+			showGroup = true
+			groupW = max(groupW, ui.TextWidth(v.Server.Group))
+		}
 	}
 
-	fmt.Fprintln(out, ui.Header.Render(
-		ui.Pad("NAME", nameW+2)+ui.Pad("TYPE", typeW+2)+ui.Pad("VERSION", verW+2)+
-			ui.Pad("STATUS", 12)+ui.Pad("PORT", 8)+"UPTIME"))
+	header := ui.Pad("NAME", nameW+2) + ui.Pad("TYPE", typeW+2) + ui.Pad("VERSION", verW+2)
+	if showGroup {
+		header += ui.Pad("GROUP", groupW+2)
+	}
+	header += ui.Pad("STATUS", 12) + ui.Pad("PORT", 8) + "UPTIME"
+	fmt.Fprintln(out, ui.Header.Render(header))
 
 	for _, v := range views {
 		uptime := ui.Subtle.Render("—")
 		if v.running() {
 			uptime = ui.Duration(v.Uptime)
 		}
-		fmt.Fprintln(out,
-			ui.Body.Render(ui.Pad(v.Name, nameW+2))+
-				ui.Subtle.Render(ui.Pad(v.Server.Type, typeW+2))+
-				ui.Subtle.Render(ui.Pad(v.Server.Version, verW+2))+
-				ui.PadStyled(ui.StatusGlyph(v.running()), 12)+
-				ui.Subtle.Render(ui.Pad(fmt.Sprintf("%d", v.port()), 8))+
-				uptime)
+		line := ui.Body.Render(ui.Pad(v.Name, nameW+2)) +
+			ui.Subtle.Render(ui.Pad(v.Server.Type, typeW+2)) +
+			ui.Subtle.Render(ui.Pad(v.Server.Version, verW+2))
+		if showGroup {
+			line += ui.Subtle.Render(ui.Pad(v.Server.Group, groupW+2))
+		}
+		line += ui.PadStyled(ui.StatusGlyph(v.running()), 12) +
+			ui.Subtle.Render(ui.Pad(fmt.Sprintf("%d", v.port()), 8)) +
+			uptime
+		fmt.Fprintln(out, line)
 	}
 }
 
@@ -131,6 +161,7 @@ type serverJSON struct {
 	Path      string `json:"path"`
 	Port      int    `json:"port"`
 	Memory    string `json:"memory,omitempty"`
+	Group     string `json:"group,omitempty"`
 	Running   bool   `json:"running"`
 	PID       int    `json:"pid,omitempty"`
 	UptimeSec int    `json:"uptime_seconds,omitempty"`
@@ -144,6 +175,7 @@ func serverToJSON(v serverView) serverJSON {
 		Path:    v.Server.Path,
 		Port:    v.port(),
 		Memory:  v.Server.Memory,
+		Group:   v.Server.Group,
 		Running: v.running(),
 	}
 	if v.running() {

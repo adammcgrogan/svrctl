@@ -26,6 +26,7 @@ type ProvisionSpec struct {
 	Path    string // empty means ~/mcservers/<name>
 	Memory  string // empty means JVM defaults
 	Port    int    // 0 means leave server.properties alone (Minecraft's 25565)
+	Group   string // empty means ungrouped
 }
 
 // ProvisionHooks lets the caller render progress however it likes: plain lines
@@ -196,6 +197,7 @@ func Provision(spec ProvisionSpec, hooks ProvisionHooks) (registry.Server, error
 		Path:    absPath,
 		Port:    spec.Port,
 		Memory:  spec.Memory,
+		Group:   spec.Group,
 	}
 
 	regPath, err := paths.RegistryFile()
