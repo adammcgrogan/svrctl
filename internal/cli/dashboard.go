@@ -4,7 +4,9 @@ package cli
 
 import (
 	"io"
+	"sort"
 
+	"github.com/adammcgrogan/svrctl/internal/modrinth"
 	"github.com/adammcgrogan/svrctl/internal/tui"
 )
 
@@ -33,6 +35,18 @@ func dashboardDeps() tui.DashboardDeps {
 			_, err := restoreServerBackup(name, id)
 			return err
 		},
+
+		Plugins:       dashboardPlugins,
+		SearchPlugins: dashboardSearchPlugins,
+		InstallPlugin: func(name, project string) (tui.PluginRow, error) {
+			installed, _, err := installPlugin(name, project)
+			return tui.PluginRow{Slug: installed.Slug, VersionNumber: installed.VersionNumber}, err
+		},
+		UpdatePlugin: func(name, slug string) (tui.PluginRow, bool, error) {
+			installed, changed, err := updatePlugin(name, slug)
+			return tui.PluginRow{Slug: installed.Slug, VersionNumber: installed.VersionNumber}, changed, err
+		},
+		RemovePlugin: removePlugin,
 	}
 }
 
@@ -70,6 +84,40 @@ func dashboardBackups(name string) ([]tui.BackupRow, error) {
 	rows := make([]tui.BackupRow, len(backups))
 	for i, b := range backups {
 		rows[i] = tui.BackupRow{ID: b.ID, SizeBytes: b.SizeBytes, CreatedAt: b.CreatedAt}
+	}
+	return rows, nil
+}
+
+func dashboardPlugins(name string) ([]tui.PluginRow, error) {
+	s, err := requirePaperServer(name)
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := loadPluginManifest(s.Path)
+	if err != nil {
+		return nil, err
+	}
+	slugs := make([]string, 0, len(manifest.Plugins))
+	for slug := range manifest.Plugins {
+		slugs = append(slugs, slug)
+	}
+	sort.Strings(slugs)
+	rows := make([]tui.PluginRow, len(slugs))
+	for i, slug := range slugs {
+		p := manifest.Plugins[slug]
+		rows[i] = tui.PluginRow{Slug: p.Slug, VersionNumber: p.VersionNumber}
+	}
+	return rows, nil
+}
+
+func dashboardSearchPlugins(query string) ([]tui.PluginHit, error) {
+	hits, err := modrinth.Search(query, 10)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]tui.PluginHit, len(hits))
+	for i, h := range hits {
+		rows[i] = tui.PluginHit{Slug: h.Slug, Title: h.Title, Description: h.Description}
 	}
 	return rows, nil
 }

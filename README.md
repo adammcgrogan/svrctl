@@ -5,10 +5,13 @@ them without hand-managing jars, Java versions, or `screen` sessions.
 
 ![svrctl's dashboard, listing two servers — one running, one stopped — with the key hints for starting, stopping, restarting, attaching to console or logs, removing, and creating a server](docs/dashboard.png)
 
-Run `svrctl` with no arguments to open that dashboard. Besides lifecycle
-control, it can edit a server's memory/port (`e`), browse and edit
-server.properties (`p`), and create/restore backups (`b`). Everything below
-also works as a plain command, for scripts and muscle memory.
+Run `svrctl` with no arguments to open that dashboard. The main list keeps to
+lifecycle actions — start, stop, restart, remove, create. Press `enter` on a
+server to open its own dashboard, which handles everything specific to it:
+console, logs, editing memory/port, browsing and editing server.properties,
+creating/restoring backups, and searching, installing, updating, and removing
+plugins on a paper server. Everything below also works as a plain command,
+for scripts and muscle memory.
 
 ## Install
 

@@ -90,7 +90,8 @@ func TestDashboardEmptyStatePointsAtCreate(t *testing.T) {
 }
 
 func TestDashboardConsoleOnStoppedServerExplainsWhyNot(t *testing.T) {
-	m := press(newTestDashboard(DashboardDeps{}), "c") // cursor starts on "creative", stopped
+	// cursor starts on "creative", stopped; drill in with "enter" first.
+	m := press(newTestDashboard(DashboardDeps{}), "enter", "c")
 
 	if m.outcome.Action != ActionQuit {
 		t.Errorf("should not have tried to attach to a stopped server")
@@ -101,7 +102,7 @@ func TestDashboardConsoleOnStoppedServerExplainsWhyNot(t *testing.T) {
 }
 
 func TestDashboardConsoleOnRunningServerRequestsAttach(t *testing.T) {
-	m := press(newTestDashboard(DashboardDeps{}), "down", "c")
+	m := press(newTestDashboard(DashboardDeps{}), "down", "enter", "c")
 
 	if m.outcome.Action != ActionConsole {
 		t.Fatalf("got action %v, want ActionConsole", m.outcome.Action)
@@ -185,10 +186,45 @@ func TestDashboardCursorStaysInBounds(t *testing.T) {
 	}
 }
 
+func TestDashboardEnterOpensServerDashboard(t *testing.T) {
+	m := press(newTestDashboard(DashboardDeps{}), "down", "enter")
+	if m.mode != modeServer {
+		t.Fatalf("expected modeServer, got %v", m.mode)
+	}
+	view := ui.StripANSI(m.View())
+	for _, want := range []string{"survival", "paper", "1.21.4", "25570"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("server view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestDashboardServerEscReturnsToList(t *testing.T) {
+	m := press(newTestDashboard(DashboardDeps{}), "enter", "esc")
+	if m.mode != modeList {
+		t.Errorf("expected esc to return to modeList, got %v", m.mode)
+	}
+}
+
+func TestDashboardListMenuOmitsPerServerActions(t *testing.T) {
+	// The whole point of splitting the dashboard in two is that the main list
+	// only shows coarse lifecycle actions — console/logs/edit/properties/
+	// backups/plugins live behind "enter" instead.
+	view := ui.StripANSI(newTestDashboard(DashboardDeps{}).View())
+	if !strings.Contains(view, "open") {
+		t.Errorf("expected the list help bar to mention opening a server:\n%s", view)
+	}
+	for _, unwanted := range []string{"console", "logs", "properties", "backups", "plugins"} {
+		if strings.Contains(view, unwanted) {
+			t.Errorf("expected the list help bar not to mention %q:\n%s", unwanted, view)
+		}
+	}
+}
+
 func TestDashboardLogsWorkOnAStoppedServer(t *testing.T) {
 	// Cursor starts on "creative", which is stopped — unlike console, logs
 	// should not be blocked by that.
-	m := press(newTestDashboard(DashboardDeps{}), "l")
+	m := press(newTestDashboard(DashboardDeps{}), "enter", "l")
 
 	if m.outcome.Action != ActionLogs {
 		t.Fatalf("got action %v, want ActionLogs", m.outcome.Action)
@@ -199,7 +235,7 @@ func TestDashboardLogsWorkOnAStoppedServer(t *testing.T) {
 }
 
 func TestDashboardLogsWorkOnARunningServer(t *testing.T) {
-	m := press(newTestDashboard(DashboardDeps{}), "down", "l")
+	m := press(newTestDashboard(DashboardDeps{}), "down", "enter", "l")
 
 	if m.outcome.Action != ActionLogs {
 		t.Fatalf("got action %v, want ActionLogs", m.outcome.Action)
@@ -322,7 +358,7 @@ func TestDashboardShowsGroupColumnWhenAnyServerHasOne(t *testing.T) {
 
 func TestDashboardEditPrefillsCurrentMemoryAndPort(t *testing.T) {
 	m := newTestDashboard(DashboardDeps{})
-	m = press(m, "e") // cursor starts on "creative": no memory, port 25565
+	m = press(m, "enter", "e") // cursor starts on "creative": no memory, port 25565
 
 	if m.mode != modeEdit {
 		t.Fatalf("expected modeEdit, got %v", m.mode)
@@ -346,11 +382,11 @@ func TestDashboardEditSubmitsMemoryAndPort(t *testing.T) {
 		},
 	}
 
-	m := press(newTestDashboard(deps), "e", "4G", "tab")
+	m := press(newTestDashboard(deps), "enter", "e", "4G", "tab")
 	next, cmd := m.Update(key("enter"))
 	m = next.(dashboardModel)
-	if m.mode != modeList {
-		t.Errorf("expected to return to modeList on submit, got %v", m.mode)
+	if m.mode != modeServer {
+		t.Errorf("expected to return to modeServer on submit, got %v", m.mode)
 	}
 	if cmd == nil {
 		t.Fatal("expected a command to run the edit")
@@ -368,7 +404,7 @@ func TestDashboardEditSubmitsMemoryAndPort(t *testing.T) {
 }
 
 func TestDashboardEditRejectsNonNumericPort(t *testing.T) {
-	m := press(newTestDashboard(DashboardDeps{}), "e", "tab",
+	m := press(newTestDashboard(DashboardDeps{}), "enter", "e", "tab",
 		"backspace", "backspace", "backspace", "backspace", "backspace", "abc")
 	m = press(m, "enter")
 
@@ -381,9 +417,9 @@ func TestDashboardEditRejectsNonNumericPort(t *testing.T) {
 }
 
 func TestDashboardEditCancelReturnsToList(t *testing.T) {
-	m := press(newTestDashboard(DashboardDeps{}), "e", "esc")
-	if m.mode != modeList {
-		t.Errorf("expected esc to return to modeList, got %v", m.mode)
+	m := press(newTestDashboard(DashboardDeps{}), "enter", "e", "esc")
+	if m.mode != modeServer {
+		t.Errorf("expected esc to return to modeServer, got %v", m.mode)
 	}
 }
 
@@ -405,7 +441,7 @@ func TestDashboardPropertiesListsThenEditsSelectedValue(t *testing.T) {
 		},
 	}
 
-	m := newTestDashboard(deps)
+	m := press(newTestDashboard(deps), "enter")
 	next, cmd := m.Update(key("p"))
 	m = next.(dashboardModel)
 	if m.mode != modeProperties {
@@ -462,15 +498,15 @@ func TestDashboardPropertiesEscReturnsToList(t *testing.T) {
 			return props, order, nil
 		},
 	}
-	next, cmd := newTestDashboard(deps).Update(key("p"))
+	next, cmd := press(newTestDashboard(deps), "enter").Update(key("p"))
 	m := next.(dashboardModel)
 	next, _ = m.Update(cmd())
 	m = next.(dashboardModel)
 
 	next, _ = m.Update(key("esc"))
 	m = next.(dashboardModel)
-	if m.mode != modeList {
-		t.Errorf("expected esc to return to modeList, got %v", m.mode)
+	if m.mode != modeServer {
+		t.Errorf("expected esc to return to modeServer, got %v", m.mode)
 	}
 }
 
@@ -486,7 +522,7 @@ func TestDashboardBackupsListsAndCreates(t *testing.T) {
 		CreateBackup: func(name string) error { created = name; return nil },
 	}
 
-	next, cmd := newTestDashboard(deps).Update(key("b"))
+	next, cmd := press(newTestDashboard(deps), "enter").Update(key("b"))
 	m := next.(dashboardModel)
 	if m.mode != modeBackups {
 		t.Fatalf("expected modeBackups, got %v", m.mode)
@@ -522,7 +558,7 @@ func TestDashboardBackupsRestoreRequiresConfirmation(t *testing.T) {
 		},
 	}
 
-	next, cmd := newTestDashboard(deps).Update(key("b"))
+	next, cmd := press(newTestDashboard(deps), "enter").Update(key("b"))
 	m := next.(dashboardModel)
 	next, _ = m.Update(cmd())
 	m = next.(dashboardModel)
@@ -547,8 +583,8 @@ func TestDashboardBackupsRestoreRequiresConfirmation(t *testing.T) {
 	m = next.(dashboardModel)
 	next, cmd = m.Update(key("y"))
 	m = next.(dashboardModel)
-	if m.mode != modeList {
-		t.Errorf("expected to return to modeList after confirming, got %v", m.mode)
+	if m.mode != modeServer {
+		t.Errorf("expected to return to modeServer after confirming, got %v", m.mode)
 	}
 	if cmd == nil {
 		t.Fatal("expected a command to run the restore")
@@ -561,5 +597,132 @@ func TestDashboardBackupsRestoreRequiresConfirmation(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "restored creative") {
 		t.Errorf("got status %q, want it to mention the restore", m.status)
+	}
+}
+
+func TestDashboardPluginsRejectVanillaServer(t *testing.T) {
+	// Cursor starts on "creative", a vanilla server — plugins don't apply.
+	m := press(newTestDashboard(DashboardDeps{}), "enter", "P")
+	if m.mode != modeServer {
+		t.Fatalf("expected to stay in modeServer, got %v", m.mode)
+	}
+	if !strings.Contains(m.failure, "vanilla") {
+		t.Errorf("got failure %q, want it to explain plugins need paper", m.failure)
+	}
+}
+
+func TestDashboardPluginsListsSearchesAndInstalls(t *testing.T) {
+	var installedName, installedProject string
+	deps := DashboardDeps{
+		List: func() ([]ServerRow, error) { return testRows(), nil },
+		Plugins: func(name string) ([]PluginRow, error) {
+			return []PluginRow{{Slug: "luckperms", VersionNumber: "5.4"}}, nil
+		},
+		SearchPlugins: func(query string) ([]PluginHit, error) {
+			return []PluginHit{{Slug: "essentialsx", Title: "EssentialsX", Description: "The essentials suite"}}, nil
+		},
+		InstallPlugin: func(name, project string) (PluginRow, error) {
+			installedName, installedProject = name, project
+			return PluginRow{Slug: project, VersionNumber: "2.21"}, nil
+		},
+	}
+
+	// "survival" (paper) is the second row.
+	next, cmd := press(newTestDashboard(deps), "down", "enter").Update(key("P"))
+	m := next.(dashboardModel)
+	if m.mode != modePlugins {
+		t.Fatalf("expected modePlugins, got %v", m.mode)
+	}
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	view := ui.StripANSI(m.View())
+	if !strings.Contains(view, "luckperms") {
+		t.Errorf("expected the installed plugin to show up:\n%s", view)
+	}
+
+	next, _ = m.Update(key("i"))
+	m = next.(dashboardModel)
+	if m.mode != modePluginSearch {
+		t.Fatalf("expected modePluginSearch, got %v", m.mode)
+	}
+
+	next, _ = m.Update(key("essentialsx"))
+	m = next.(dashboardModel)
+	next, cmd = m.Update(key("enter"))
+	m = next.(dashboardModel)
+	if cmd == nil {
+		t.Fatal("expected a command to run the search")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+	if m.mode != modePluginResults {
+		t.Fatalf("expected modePluginResults, got %v", m.mode)
+	}
+	if view := ui.StripANSI(m.View()); !strings.Contains(view, "essentialsx") {
+		t.Errorf("expected the search hit to show up:\n%s", view)
+	}
+
+	next, cmd = m.Update(key("enter"))
+	m = next.(dashboardModel)
+	if cmd == nil {
+		t.Fatal("expected a command to install the selected hit")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	if installedName != "survival" || installedProject != "essentialsx" {
+		t.Errorf("got InstallPlugin(%q, %q), want (survival, essentialsx)", installedName, installedProject)
+	}
+	if m.mode != modePlugins {
+		t.Errorf("expected to return to modePlugins after installing, got %v", m.mode)
+	}
+}
+
+func TestDashboardPluginsUpdateAndRemove(t *testing.T) {
+	var updatedSlug, removedSlug string
+	deps := DashboardDeps{
+		List: func() ([]ServerRow, error) { return testRows(), nil },
+		Plugins: func(name string) ([]PluginRow, error) {
+			return []PluginRow{{Slug: "luckperms", VersionNumber: "5.4"}}, nil
+		},
+		UpdatePlugin: func(name, slug string) (PluginRow, bool, error) {
+			updatedSlug = slug
+			return PluginRow{Slug: slug, VersionNumber: "5.5"}, true, nil
+		},
+		RemovePlugin: func(name, slug string) error {
+			removedSlug = slug
+			return nil
+		},
+	}
+
+	next, cmd := press(newTestDashboard(deps), "down", "enter").Update(key("P"))
+	m := next.(dashboardModel)
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	next, cmd = m.Update(key("u"))
+	m = next.(dashboardModel)
+	if cmd == nil {
+		t.Fatal("expected a command to update the selected plugin")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+	if updatedSlug != "luckperms" {
+		t.Errorf("got UpdatePlugin slug %q, want luckperms", updatedSlug)
+	}
+	if !strings.Contains(m.status, "luckperms") {
+		t.Errorf("got status %q, want it to mention luckperms", m.status)
+	}
+
+	next, cmd = m.Update(key("d"))
+	m = next.(dashboardModel)
+	if cmd == nil {
+		t.Fatal("expected a command to remove the selected plugin")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+	if removedSlug != "luckperms" {
+		t.Errorf("got RemovePlugin slug %q, want luckperms", removedSlug)
 	}
 }

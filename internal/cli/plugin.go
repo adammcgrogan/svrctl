@@ -74,16 +74,7 @@ func newPluginInstallCmd() *cobra.Command {
 			name, project := args[0], args[1]
 			out := cmd.OutOrStdout()
 
-			s, err := requirePaperServer(name)
-			if err != nil {
-				return err
-			}
-
-			version, err := modrinth.LatestVersion(project, s.Version, paperLoader)
-			if err != nil {
-				return err
-			}
-			installed, err := installPluginVersion(s.Path, project, version)
+			installed, s, err := installPlugin(name, project)
 			if err != nil {
 				return err
 			}
@@ -96,6 +87,22 @@ func newPluginInstallCmd() *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+// installPlugin resolves project's latest build compatible with name's paper
+// version and installs it, shared by `svrctl plugin install` and the
+// dashboard's plugin search.
+func installPlugin(name, project string) (installedPlugin, registry.Server, error) {
+	s, err := requirePaperServer(name)
+	if err != nil {
+		return installedPlugin{}, registry.Server{}, err
+	}
+	version, err := modrinth.LatestVersion(project, s.Version, paperLoader)
+	if err != nil {
+		return installedPlugin{}, registry.Server{}, err
+	}
+	installed, err := installPluginVersion(s.Path, project, version)
+	return installed, s, err
 }
 
 func newPluginListCmd() *cobra.Command {
@@ -175,22 +182,13 @@ func newPluginUpdateCmd() *cobra.Command {
 			changed := false
 			for _, slug := range targets {
 				current := manifest.Plugins[slug]
-				version, err := modrinth.LatestVersion(current.ProjectID, s.Version, paperLoader)
+				installed, didChange, err := updatePluginIn(s.Path, s.Version, slug, manifest)
 				if err != nil {
 					ui.Warnf(out, "%s: %v", slug, err)
 					continue
 				}
-				if version.ID == current.VersionID {
+				if !didChange {
 					ui.Stepf(out, "%s is already up to date (%s)", slug, current.VersionNumber)
-					continue
-				}
-				if err := os.Remove(filepath.Join(s.Path, "plugins", current.Filename)); err != nil && !os.IsNotExist(err) {
-					ui.Warnf(out, "%s: removing old jar: %v", slug, err)
-					continue
-				}
-				installed, err := installPluginVersion(s.Path, slug, version)
-				if err != nil {
-					ui.Warnf(out, "%s: %v", slug, err)
 					continue
 				}
 				changed = true
@@ -205,6 +203,43 @@ func newPluginUpdateCmd() *cobra.Command {
 	return cmd
 }
 
+// updatePluginIn re-resolves slug's latest build compatible with mcVersion
+// against manifest's current record for it and installs it if newer,
+// replacing the old jar in serverDir. changed is false, with no error, when
+// the current record is already the latest.
+func updatePluginIn(serverDir, mcVersion, slug string, manifest *pluginManifest) (installed installedPlugin, changed bool, err error) {
+	current, ok := manifest.Plugins[slug]
+	if !ok {
+		return installedPlugin{}, false, fmt.Errorf("%q is not installed (run `svrctl plugin list`)", slug)
+	}
+	version, err := modrinth.LatestVersion(current.ProjectID, mcVersion, paperLoader)
+	if err != nil {
+		return installedPlugin{}, false, err
+	}
+	if version.ID == current.VersionID {
+		return current, false, nil
+	}
+	if err := os.Remove(filepath.Join(serverDir, "plugins", current.Filename)); err != nil && !os.IsNotExist(err) {
+		return installedPlugin{}, false, fmt.Errorf("removing old jar: %w", err)
+	}
+	installed, err = installPluginVersion(serverDir, slug, version)
+	return installed, true, err
+}
+
+// updatePlugin is updatePluginIn for the dashboard's single-plugin update
+// action, which only has a server name and slug to start from.
+func updatePlugin(name, slug string) (installedPlugin, bool, error) {
+	s, err := requirePaperServer(name)
+	if err != nil {
+		return installedPlugin{}, false, err
+	}
+	manifest, err := loadPluginManifest(s.Path)
+	if err != nil {
+		return installedPlugin{}, false, err
+	}
+	return updatePluginIn(s.Path, s.Version, slug, manifest)
+}
+
 func newPluginRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "remove <name> <plugin>",
@@ -213,37 +248,42 @@ func newPluginRemoveCmd() *cobra.Command {
 		ValidArgsFunction: completeServerNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, slug := args[0], args[1]
-			s, err := requirePaperServer(name)
-			if err != nil {
-				return err
-			}
 			out := cmd.OutOrStdout()
 
-			manifest, err := loadPluginManifest(s.Path)
-			if err != nil {
-				return err
-			}
-			p, ok := manifest.Plugins[slug]
-			if !ok {
-				return fmt.Errorf("%q is not installed on %q (run `svrctl plugin list %s`)", slug, name, name)
-			}
-
-			if err := os.Remove(filepath.Join(s.Path, "plugins", p.Filename)); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("removing plugin jar: %w", err)
-			}
-			delete(manifest.Plugins, slug)
-			if err := manifest.save(s.Path); err != nil {
+			if err := removePlugin(name, slug); err != nil {
 				return err
 			}
 
 			ui.Okf(out, "Removed %s", ui.Strong.Render(slug))
-			if buildView(name, s).running() {
+			if s, err := requirePaperServer(name); err == nil && buildView(name, s).running() {
 				ui.Hintf(out, "svrctl restart %s", name)
 			}
 			return nil
 		},
 	}
 	return cmd
+}
+
+// removePlugin deletes an installed plugin's jar and manifest record, shared
+// by `svrctl plugin remove` and the dashboard.
+func removePlugin(name, slug string) error {
+	s, err := requirePaperServer(name)
+	if err != nil {
+		return err
+	}
+	manifest, err := loadPluginManifest(s.Path)
+	if err != nil {
+		return err
+	}
+	p, ok := manifest.Plugins[slug]
+	if !ok {
+		return fmt.Errorf("%q is not installed on %q (run `svrctl plugin list %s`)", slug, name, name)
+	}
+	if err := os.Remove(filepath.Join(s.Path, "plugins", p.Filename)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing plugin jar: %w", err)
+	}
+	delete(manifest.Plugins, slug)
+	return manifest.save(s.Path)
 }
 
 // requirePaperServer resolves name and rejects it unless it's a paper

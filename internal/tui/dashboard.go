@@ -45,6 +45,19 @@ type BackupRow struct {
 	CreatedAt time.Time
 }
 
+// PluginRow is one installed plugin as the dashboard needs to display it.
+type PluginRow struct {
+	Slug          string
+	VersionNumber string
+}
+
+// PluginHit is one Modrinth search result as the dashboard needs to display it.
+type PluginHit struct {
+	Slug        string
+	Title       string
+	Description string
+}
+
 // Action is what the user asked for as the dashboard closed. Actions that need
 // the whole terminal cannot run inside the dashboard's own Bubble Tea program,
 // so they are handed back to the caller to perform.
@@ -90,6 +103,18 @@ type DashboardDeps struct {
 	// RestoreBackup replaces a server's world data with the named backup
 	// ("latest" or a specific ID).
 	RestoreBackup func(name, id string) error
+
+	// Plugins lists a server's installed plugins.
+	Plugins func(name string) ([]PluginRow, error)
+	// SearchPlugins searches Modrinth for plugins matching query.
+	SearchPlugins func(query string) ([]PluginHit, error)
+	// InstallPlugin installs a plugin (a Modrinth slug or project ID) onto a server.
+	InstallPlugin func(name, project string) (PluginRow, error)
+	// UpdatePlugin re-resolves slug's latest compatible build and installs it
+	// if newer. changed is false when it was already up to date.
+	UpdatePlugin func(name, slug string) (row PluginRow, changed bool, err error)
+	// RemovePlugin removes an installed plugin.
+	RemovePlugin func(name, slug string) error
 }
 
 // RunDashboard shows the dashboard and reports what to do next.
@@ -118,11 +143,18 @@ type mode int
 
 const (
 	modeList mode = iota
+	// modeServer is a single server's own dashboard — everything but the
+	// coarse lifecycle actions lives here instead of on the main list, so the
+	// list stays scannable no matter how many per-server features exist.
+	modeServer
 	modeEdit
 	modeProperties
 	modePropertyEdit
 	modeBackups
 	modeConfirmRestore
+	modePlugins
+	modePluginSearch
+	modePluginResults
 )
 
 type dashboardModel struct {
@@ -164,6 +196,14 @@ type dashboardModel struct {
 	backupRows    []BackupRow
 	restoreID     string
 
+	// plugins sub-mode: a picker over the server's installed plugins, plus a
+	// search step (text input, then a picker over the results) for installing
+	// a new one.
+	pluginsPicker picker
+	pluginQuery   textinput.Model
+	pluginResults []PluginHit
+	resultsPicker picker
+
 	width, height int
 	outcome       Outcome
 	err           error
@@ -196,6 +236,29 @@ type backupsLoadedMsg struct {
 type backupCreatedMsg struct {
 	name string
 	err  error
+}
+type pluginsLoadedMsg struct {
+	name string
+	rows []PluginRow
+	err  error
+}
+type pluginSearchMsg struct {
+	query string
+	hits  []PluginHit
+	err   error
+}
+type pluginInstalledMsg struct {
+	name string
+	err  error
+}
+type pluginUpdatedMsg struct {
+	name, slug string
+	changed    bool
+	err        error
+}
+type pluginRemovedMsg struct {
+	name, slug string
+	err        error
 }
 type tickMsg time.Time
 
@@ -243,6 +306,20 @@ func (m dashboardModel) loadBackups(name string) tea.Cmd {
 	}
 }
 
+func (m dashboardModel) loadPlugins(name string) tea.Cmd {
+	return func() tea.Msg {
+		rows, err := m.deps.Plugins(name)
+		return pluginsLoadedMsg{name: name, rows: rows, err: err}
+	}
+}
+
+func (m dashboardModel) searchPlugins(query string) tea.Cmd {
+	return func() tea.Msg {
+		hits, err := m.deps.SearchPlugins(query)
+		return pluginSearchMsg{query: query, hits: hits, err: err}
+	}
+}
+
 func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -281,7 +358,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = ""
 		if msg.err != nil {
 			m.failure = msg.err.Error()
-			m.mode = modeList
+			m.mode = modeServer
 			return m, nil
 		}
 		items := make([]Item, len(msg.order))
@@ -295,7 +372,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = ""
 		if msg.err != nil {
 			m.failure = msg.err.Error()
-			m.mode = modeList
+			m.mode = modeServer
 			return m, nil
 		}
 		m.status = "set " + msg.key
@@ -305,7 +382,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = ""
 		if msg.err != nil {
 			m.failure = msg.err.Error()
-			m.mode = modeList
+			m.mode = modeServer
 			return m, nil
 		}
 		m.backupRows = msg.rows
@@ -324,6 +401,69 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = "backed up " + msg.name
 		return m, m.loadBackups(msg.name)
+
+	case pluginsLoadedMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			m.mode = modeServer
+			return m, nil
+		}
+		items := make([]Item, len(msg.rows))
+		for i, r := range msg.rows {
+			items[i] = Item{Title: r.Slug, Desc: r.VersionNumber}
+		}
+		m.pluginsPicker = newPicker(items, 10, false)
+		return m, nil
+
+	case pluginSearchMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			m.mode = modePluginSearch
+			return m, nil
+		}
+		m.pluginResults = msg.hits
+		items := make([]Item, len(msg.hits))
+		for i, h := range msg.hits {
+			items[i] = Item{Title: h.Slug, Desc: ui.Truncate(h.Title+" — "+h.Description, 80)}
+		}
+		m.resultsPicker = newPicker(items, 10, false)
+		m.mode = modePluginResults
+		return m, nil
+
+	case pluginInstalledMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			m.mode = modePlugins
+			return m, m.loadPlugins(msg.name)
+		}
+		m.status = "installed plugin"
+		m.mode = modePlugins
+		return m, m.loadPlugins(msg.name)
+
+	case pluginUpdatedMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			return m, m.loadPlugins(msg.name)
+		}
+		if msg.changed {
+			m.status = msg.slug + " updated"
+		} else {
+			m.status = msg.slug + " is already up to date"
+		}
+		return m, m.loadPlugins(msg.name)
+
+	case pluginRemovedMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			return m, m.loadPlugins(msg.name)
+		}
+		m.status = "removed " + msg.slug
+		return m, m.loadPlugins(msg.name)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -344,6 +484,8 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.mode {
+	case modeServer:
+		return m.handleServerKey(msg)
 	case modeEdit:
 		return m.handleEditKey(msg)
 	case modeProperties:
@@ -354,10 +496,20 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleBackupsKey(msg)
 	case modeConfirmRestore:
 		return m.handleConfirmRestoreKey(msg)
+	case modePlugins:
+		return m.handlePluginsKey(msg)
+	case modePluginSearch:
+		return m.handlePluginSearchKey(msg)
+	case modePluginResults:
+		return m.handlePluginResultsKey(msg)
 	}
 
 	current, hasCurrent := m.current()
 
+	// modeList only carries the coarse lifecycle actions; everything specific
+	// to one server — console, logs, edit, properties, backups, plugins —
+	// lives behind "enter" on modeServer instead, so this list stays
+	// scannable no matter how many per-server features exist.
 	switch msg.String() {
 	case "q", "ctrl+c", "esc":
 		m.outcome = Outcome{Action: ActionQuit}
@@ -375,6 +527,12 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		m.outcome = Outcome{Action: ActionCreate}
 		return m, tea.Quit
+
+	case "enter":
+		if !hasCurrent {
+			break
+		}
+		m.mode = modeServer
 
 	case "s":
 		if !hasCurrent {
@@ -405,34 +563,63 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = "restarting " + current.Name
 		return m, m.runAction("restarted", current.Name, m.deps.Restart)
 
-	case "c", "enter":
-		if !hasCurrent {
-			break
-		}
-		if !current.Running {
-			m.failure = current.Name + " is not running — press s to start it"
-			break
-		}
-		m.outcome = Outcome{Action: ActionConsole, Server: current.Name}
-		return m, tea.Quit
-
-	case "l":
-		if !hasCurrent {
-			break
-		}
-		m.outcome = Outcome{Action: ActionLogs, Server: current.Name}
-		return m, tea.Quit
-
 	case "d":
 		if !hasCurrent {
 			break
 		}
 		m.confirming = true
+	}
+	return m, nil
+}
+
+// handleServerKey drives a single server's own dashboard, opened by "enter"
+// from the main list. Every per-server feature lives here rather than
+// cluttering the list's help bar.
+func (m dashboardModel) handleServerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	current, hasCurrent := m.current()
+	if !hasCurrent {
+		m.mode = modeList
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc", "q":
+		m.mode = modeList
+		return m, nil
+
+	case "s":
+		if current.Running {
+			m.failure = current.Name + " is already running"
+			return m, nil
+		}
+		m.busy = "starting " + current.Name
+		return m, m.runAction("started", current.Name, m.deps.Start)
+
+	case "x":
+		if !current.Running {
+			m.failure = current.Name + " is not running"
+			return m, nil
+		}
+		m.busy = "stopping " + current.Name
+		return m, m.runAction("stopped", current.Name, m.deps.Stop)
+
+	case "r":
+		m.busy = "restarting " + current.Name
+		return m, m.runAction("restarted", current.Name, m.deps.Restart)
+
+	case "c":
+		if !current.Running {
+			m.failure = current.Name + " is not running — press s to start it"
+			return m, nil
+		}
+		m.outcome = Outcome{Action: ActionConsole, Server: current.Name}
+		return m, tea.Quit
+
+	case "l":
+		m.outcome = Outcome{Action: ActionLogs, Server: current.Name}
+		return m, tea.Quit
 
 	case "e":
-		if !hasCurrent {
-			break
-		}
 		m.mode = modeEdit
 		m.editErr = ""
 		m.editOnPort = false
@@ -448,20 +635,23 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case "p":
-		if !hasCurrent {
-			break
-		}
 		m.mode = modeProperties
 		m.busy = "loading " + current.Name + "'s properties"
 		return m, m.loadProperties(current.Name)
 
 	case "b":
-		if !hasCurrent {
-			break
-		}
 		m.mode = modeBackups
 		m.busy = "loading " + current.Name + "'s backups"
 		return m, m.loadBackups(current.Name)
+
+	case "P":
+		if current.Type != "paper" {
+			m.failure = current.Name + " is a " + current.Type + " server — plugin management only works on paper servers"
+			return m, nil
+		}
+		m.mode = modePlugins
+		m.busy = "loading " + current.Name + "'s plugins"
+		return m, m.loadPlugins(current.Name)
 	}
 	return m, nil
 }
@@ -507,7 +697,7 @@ func (m dashboardModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m dashboardModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.mode = modeList
+		m.mode = modeServer
 		return m, nil
 
 	case tea.KeyTab, tea.KeyShiftTab, tea.KeyDown, tea.KeyUp:
@@ -530,7 +720,7 @@ func (m dashboardModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		current, hasCurrent := m.current()
 		if !hasCurrent {
-			m.mode = modeList
+			m.mode = modeServer
 			return m, nil
 		}
 		port := 0
@@ -544,7 +734,7 @@ func (m dashboardModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		memory := m.editMemory.Value()
 		name := current.Name
-		m.mode = modeList
+		m.mode = modeServer
 		m.busy = "updating " + name
 		return m, func() tea.Msg {
 			return actionDoneMsg{verb: "updated", name: name, err: m.deps.Edit(name, memory, port)}
@@ -563,7 +753,7 @@ func (m dashboardModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handlePropertiesKey drives the server.properties picker opened by "p".
 func (m dashboardModel) handlePropertiesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyEsc {
-		m.mode = modeList
+		m.mode = modeServer
 		return m, nil
 	}
 	if msg.Type == tea.KeyEnter {
@@ -592,7 +782,7 @@ func (m dashboardModel) handlePropertyEditKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	case tea.KeyEnter:
 		current, hasCurrent := m.current()
 		if !hasCurrent {
-			m.mode = modeList
+			m.mode = modeServer
 			return m, nil
 		}
 		name, key, value := current.Name, m.propKey, m.propValueInput.Value()
@@ -612,7 +802,7 @@ func (m dashboardModel) handleBackupsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	current, hasCurrent := m.current()
 	switch msg.String() {
 	case "esc":
-		m.mode = modeList
+		m.mode = modeServer
 		return m, nil
 	case "c":
 		if !hasCurrent {
@@ -653,7 +843,7 @@ func (m dashboardModel) handleConfirmRestoreKey(msg tea.KeyMsg) (tea.Model, tea.
 			return m, nil
 		}
 		name, id := current.Name, m.restoreID
-		m.mode = modeList
+		m.mode = modeServer
 		m.busy = "restoring " + name
 		return m, func() tea.Msg {
 			return actionDoneMsg{verb: "restored", name: name, err: m.deps.RestoreBackup(name, id)}
@@ -661,6 +851,90 @@ func (m dashboardModel) handleConfirmRestoreKey(msg tea.KeyMsg) (tea.Model, tea.
 	case "esc", "n", "ctrl+c":
 		m.mode = modeBackups
 	}
+	return m, nil
+}
+
+// handlePluginsKey drives the installed-plugins picker opened by "P".
+func (m dashboardModel) handlePluginsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	current, hasCurrent := m.current()
+	switch msg.String() {
+	case "esc":
+		m.mode = modeServer
+		return m, nil
+	case "i":
+		if !hasCurrent {
+			return m, nil
+		}
+		m.mode = modePluginSearch
+		m.pluginQuery = newDashboardInput("e.g. luckperms")
+		m.pluginQuery.Focus()
+		return m, textinput.Blink
+	case "u":
+		item, ok := m.pluginsPicker.selected()
+		if !ok || !hasCurrent {
+			return m, nil
+		}
+		name, slug := current.Name, item.Title
+		m.busy = "updating " + slug
+		return m, func() tea.Msg {
+			_, changed, err := m.deps.UpdatePlugin(name, slug)
+			return pluginUpdatedMsg{name: name, slug: slug, changed: changed, err: err}
+		}
+	case "d":
+		item, ok := m.pluginsPicker.selected()
+		if !ok || !hasCurrent {
+			return m, nil
+		}
+		name, slug := current.Name, item.Title
+		m.busy = "removing " + slug
+		return m, func() tea.Msg {
+			return pluginRemovedMsg{name: name, slug: slug, err: m.deps.RemovePlugin(name, slug)}
+		}
+	}
+	m.pluginsPicker.update(msg)
+	return m, nil
+}
+
+// handlePluginSearchKey drives the search query input opened by "i".
+func (m dashboardModel) handlePluginSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode = modePlugins
+		return m, nil
+	case tea.KeyEnter:
+		query := strings.TrimSpace(m.pluginQuery.Value())
+		if query == "" {
+			return m, nil
+		}
+		m.busy = "searching modrinth for " + query
+		return m, m.searchPlugins(query)
+	}
+	var cmd tea.Cmd
+	m.pluginQuery, cmd = m.pluginQuery.Update(msg)
+	return m, cmd
+}
+
+// handlePluginResultsKey drives the search-results picker opened once a
+// search comes back, installing whichever hit is selected.
+func (m dashboardModel) handlePluginResultsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	current, hasCurrent := m.current()
+	switch msg.String() {
+	case "esc":
+		m.mode = modePluginSearch
+		return m, nil
+	case "enter":
+		item, ok := m.resultsPicker.selected()
+		if !ok || !hasCurrent {
+			return m, nil
+		}
+		name, project := current.Name, item.Title
+		m.busy = "installing " + project
+		return m, func() tea.Msg {
+			_, err := m.deps.InstallPlugin(name, project)
+			return pluginInstalledMsg{name: name, err: err}
+		}
+	}
+	m.resultsPicker.update(msg)
 	return m, nil
 }
 
@@ -690,6 +964,9 @@ func (m dashboardModel) View() string {
 	}
 
 	switch m.mode {
+	case modeServer:
+		b.WriteString(m.serverView())
+		return b.String()
 	case modeEdit:
 		b.WriteString(m.editView())
 		return b.String()
@@ -704,6 +981,15 @@ func (m dashboardModel) View() string {
 		return b.String()
 	case modeConfirmRestore:
 		b.WriteString(m.confirmRestoreView())
+		return b.String()
+	case modePlugins:
+		b.WriteString(m.pluginsView())
+		return b.String()
+	case modePluginSearch:
+		b.WriteString(m.pluginSearchView())
+		return b.String()
+	case modePluginResults:
+		b.WriteString(m.pluginResultsView())
 		return b.String()
 	}
 
@@ -726,6 +1012,54 @@ func (m dashboardModel) View() string {
 
 	b.WriteString("\n " + ui.HelpBar(
 		"↑↓", "select",
+		"enter", "open",
+		"s", "start",
+		"x", "stop",
+		"r", "restart",
+		"d", "remove",
+		"n", "new",
+		"q", "quit",
+	) + "\n")
+	return b.String()
+}
+
+// serverView is one server's own dashboard, opened by "enter" from the main
+// list — everything specific to that server lives behind a key here instead
+// of crowding the list's help bar.
+func (m dashboardModel) serverView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Title.Render(current.Name) + "  " + ui.StatusGlyph(current.Running) + "\n\n")
+
+	b.WriteString(" " + ui.Subtle.Render("Type") + "     " + ui.Body.Render(current.Type) + "\n")
+	b.WriteString(" " + ui.Subtle.Render("Version") + "  " + ui.Body.Render(current.Version) + "\n")
+	if current.Port != 0 {
+		b.WriteString(" " + ui.Subtle.Render("Port") + "     " + ui.Body.Render(strconv.Itoa(current.Port)) + "\n")
+	}
+	memory := current.Memory
+	if memory == "" {
+		memory = "default"
+	}
+	b.WriteString(" " + ui.Subtle.Render("Memory") + "   " + ui.Body.Render(memory) + "\n")
+	if current.Group != "" {
+		b.WriteString(" " + ui.Subtle.Render("Group") + "    " + ui.Body.Render(current.Group) + "\n")
+	}
+	if current.Running {
+		b.WriteString(" " + ui.Subtle.Render("Uptime") + "   " + ui.Body.Render(ui.Duration(current.Uptime)) + "\n")
+	}
+	b.WriteString(" " + ui.Subtle.Render("Path") + "     " + ui.Subtle.Render(current.Path) + "\n")
+
+	switch {
+	case m.failure != "":
+		b.WriteString("\n " + ui.Failure.Render(ui.GlyphFail+" "+m.failure) + "\n")
+	case m.status != "":
+		b.WriteString("\n " + ui.Success.Render(ui.GlyphOK+" "+m.status) + "\n")
+	default:
+		b.WriteString("\n")
+	}
+
+	helps := []string{
+		"esc", "back",
 		"s", "start",
 		"x", "stop",
 		"r", "restart",
@@ -734,10 +1068,11 @@ func (m dashboardModel) View() string {
 		"e", "edit",
 		"p", "properties",
 		"b", "backups",
-		"d", "remove",
-		"n", "new",
-		"q", "quit",
-	) + "\n")
+	}
+	if current.Type == "paper" {
+		helps = append(helps, "P", "plugins")
+	}
+	b.WriteString("\n " + ui.HelpBar(helps...) + "\n")
 	return b.String()
 }
 
@@ -814,6 +1149,44 @@ func (m dashboardModel) confirmRestoreView() string {
 	b.WriteString(" " + ui.Warning.Render("Restore "+current.Name+" from "+m.restoreID+"?") + "\n")
 	b.WriteString(" " + ui.Subtle.Render("Anything played since that backup was taken is gone.") + "\n")
 	b.WriteString("\n " + ui.HelpBar("y", "restore", "esc", "cancel") + "\n")
+	return b.String()
+}
+
+// pluginsView shows the installed-plugins picker opened by "P".
+func (m dashboardModel) pluginsView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Body.Render(current.Name+"'s plugins") + "\n\n")
+	if len(m.pluginsPicker.items) == 0 {
+		b.WriteString(" " + ui.Subtle.Render("No plugins installed.") + "\n")
+	} else {
+		b.WriteString(m.pluginsPicker.view(m.width))
+	}
+	b.WriteString("\n " + ui.HelpBar("↑↓", "select", "i", "install", "u", "update", "d", "remove", "esc", "back") + "\n")
+	return b.String()
+}
+
+// pluginSearchView shows the search query input opened by "i".
+func (m dashboardModel) pluginSearchView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Body.Render("Search Modrinth for a plugin to install on "+current.Name) + "\n\n")
+	b.WriteString(" " + m.pluginQuery.View() + "\n")
+	b.WriteString("\n " + ui.HelpBar("enter", "search", "esc", "back") + "\n")
+	return b.String()
+}
+
+// pluginResultsView shows the search-results picker opened once a search
+// comes back.
+func (m dashboardModel) pluginResultsView() string {
+	var b strings.Builder
+	b.WriteString(" " + ui.Body.Render("Results for “"+m.pluginQuery.Value()+"”") + "\n\n")
+	if len(m.pluginResults) == 0 {
+		b.WriteString(" " + ui.Subtle.Render("No plugins found.") + "\n")
+	} else {
+		b.WriteString(m.resultsPicker.view(m.width))
+	}
+	b.WriteString("\n " + ui.HelpBar("↑↓", "select", "enter", "install", "esc", "back") + "\n")
 	return b.String()
 }
 
