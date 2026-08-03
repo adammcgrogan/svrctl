@@ -80,7 +80,7 @@ func Run(opts RunOptions) error {
 	defer listener.Close()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	if err := writeRunState(opts.ServerDir, RunState{PID: os.Getpid(), Port: port, Token: token}); err != nil {
+	if err := writeRunState(opts.ServerDir, RunState{PID: os.Getpid(), ChildPID: cmd.Process.Pid, Port: port, Token: token}); err != nil {
 		return err
 	}
 	defer clearRunState(opts.ServerDir)

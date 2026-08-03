@@ -12,9 +12,10 @@ import (
 
 // RunState is persisted to <serverDir>/.svrctl/run.json while a server is running.
 type RunState struct {
-	PID   int    `json:"pid"`
-	Port  int    `json:"port"`
-	Token string `json:"token"`
+	PID      int    `json:"pid"`       // the detached runner process
+	ChildPID int    `json:"child_pid"` // the java process the runner launched
+	Port     int    `json:"port"`
+	Token    string `json:"token"`
 }
 
 func runStateDir(serverDir string) string {
@@ -115,15 +116,19 @@ func readRunError(serverDir string) (string, bool) {
 	return string(data), true
 }
 
-// IsRunning reports whether the process recorded in the run state is alive.
+// IsRunning reports whether the server is running: either the runner or the
+// java child it launched is still alive. A runner that's been killed without
+// its child exiting leaves the child reparented and still holding the
+// world's session lock, so treating the runner's death alone as "stopped"
+// would let a second `start` collide with the orphan.
 func IsRunning(serverDir string) (*RunState, bool) {
 	st, ok := ReadRunState(serverDir)
 	if !ok {
 		return nil, false
 	}
-	if !processAlive(st.PID) {
-		clearRunState(serverDir)
-		return nil, false
+	if processAlive(st.PID) || (st.ChildPID != 0 && processAlive(st.ChildPID)) {
+		return st, true
 	}
-	return st, true
+	clearRunState(serverDir)
+	return nil, false
 }

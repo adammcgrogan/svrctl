@@ -27,12 +27,14 @@ func Stop(serverDir string, timeout time.Duration, force bool) error {
 		}
 	}
 
-	proc, err := os.FindProcess(st.PID)
-	if err != nil {
-		clearRunState(serverDir)
-		return nil
+	if proc, err := os.FindProcess(st.PID); err == nil {
+		_ = proc.Kill()
 	}
-	_ = proc.Kill()
+	if st.ChildPID != 0 && st.ChildPID != st.PID {
+		if child, err := os.FindProcess(st.ChildPID); err == nil {
+			_ = child.Kill()
+		}
+	}
 	clearRunState(serverDir)
 	return nil
 }
