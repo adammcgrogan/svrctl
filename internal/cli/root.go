@@ -104,11 +104,13 @@ func newLegacyServerCmd() *cobra.Command {
 // only happen once the first has released it — hence the loop back into the
 // dashboard when that program finishes.
 func runDashboard() error {
+	var focus string
 	for {
-		next, err := tui.RunDashboard(dashboardDeps())
+		next, err := tui.RunDashboard(dashboardDeps(), focus)
 		if err != nil {
 			return err
 		}
+		focus = ""
 		switch next.Action {
 		case tui.ActionQuit:
 			return nil
@@ -116,10 +118,12 @@ func runDashboard() error {
 			if err := attachConsole(next.Server); err != nil {
 				reportError(err)
 			}
+			focus = next.Server
 		case tui.ActionLogs:
 			if err := attachLogs(next.Server); err != nil {
 				reportError(err)
 			}
+			focus = next.Server
 		case tui.ActionCreate:
 			if err := runCreateWizard(os.Stdout, ProvisionSpec{}); err != nil {
 				reportError(err)

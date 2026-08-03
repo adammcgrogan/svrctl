@@ -199,6 +199,36 @@ func TestDashboardEnterOpensServerDashboard(t *testing.T) {
 	}
 }
 
+func TestDashboardFocusReopensServerDashboard(t *testing.T) {
+	// After attachConsole/attachLogs hand the terminal back, RunDashboard is
+	// called again with focus set to the server the user was just looking
+	// at, so they land back on it instead of the main list.
+	m := dashboardModel{deps: DashboardDeps{}, width: 100, height: 24, focus: "survival"}
+	next, _ := m.Update(rowsMsg{rows: testRows()})
+	m = next.(dashboardModel)
+
+	if m.mode != modeServer {
+		t.Fatalf("expected modeServer, got %v", m.mode)
+	}
+	current, ok := m.current()
+	if !ok || current.Name != "survival" {
+		t.Fatalf("expected cursor on survival, got %+v (ok=%v)", current, ok)
+	}
+	if m.focus != "" {
+		t.Errorf("expected focus to be cleared after use, got %q", m.focus)
+	}
+}
+
+func TestDashboardFocusOnUnknownServerStaysOnList(t *testing.T) {
+	m := dashboardModel{deps: DashboardDeps{}, width: 100, height: 24, focus: "gone"}
+	next, _ := m.Update(rowsMsg{rows: testRows()})
+	m = next.(dashboardModel)
+
+	if m.mode != modeList {
+		t.Errorf("expected modeList when the focused server is gone, got %v", m.mode)
+	}
+}
+
 func TestDashboardServerEscReturnsToList(t *testing.T) {
 	m := press(newTestDashboard(DashboardDeps{}), "enter", "esc")
 	if m.mode != modeList {

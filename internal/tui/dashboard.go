@@ -117,8 +117,11 @@ type DashboardDeps struct {
 	RemovePlugin func(name, slug string) error
 }
 
-// RunDashboard shows the dashboard and reports what to do next.
-func RunDashboard(deps DashboardDeps) (Outcome, error) {
+// RunDashboard shows the dashboard and reports what to do next. focus, if
+// non-empty, opens straight into that server's own dashboard instead of the
+// main list — used to return to where the user was after an action (console,
+// logs) that had to hand back the whole terminal.
+func RunDashboard(deps DashboardDeps, focus string) (Outcome, error) {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = ui.Running
@@ -128,6 +131,7 @@ func RunDashboard(deps DashboardDeps) (Outcome, error) {
 		spinner: sp,
 		width:   100,
 		height:  24,
+		focus:   focus,
 	}, tea.WithAltScreen()).Run()
 	if err != nil {
 		return Outcome{}, err
@@ -207,6 +211,12 @@ type dashboardModel struct {
 	width, height int
 	outcome       Outcome
 	err           error
+
+	// focus is a server name to jump straight into modeServer for once the
+	// first row list loads, then cleared — set when the dashboard is reopened
+	// after an action (console, logs) that needed the whole terminal, so the
+	// user lands back where they were instead of the main list.
+	focus string
 }
 
 type rowsMsg struct {
@@ -342,6 +352,16 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rows = msg.rows
 		if m.cursor >= len(m.rows) {
 			m.cursor = max(len(m.rows)-1, 0)
+		}
+		if m.focus != "" {
+			for i, r := range m.rows {
+				if r.Name == m.focus {
+					m.cursor = i
+					m.mode = modeServer
+					break
+				}
+			}
+			m.focus = ""
 		}
 		return m, nil
 
