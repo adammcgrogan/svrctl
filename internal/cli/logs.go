@@ -58,7 +58,7 @@ func newLogsCmd() *cobra.Command {
 				}
 				return nil
 			}
-			return followLog(out, f)
+			return followLog(out, logPath, f)
 		},
 	}
 
@@ -181,8 +181,11 @@ func attachLogs(name string) error {
 	})
 }
 
-// followLog streams appended output until interrupted.
-func followLog(out io.Writer, f *os.File) error {
+// followLog streams appended output until interrupted. path is restated
+// alongside the already-open f so a restart that truncates or replaces the
+// log file can be detected and reopened from the start, rather than the
+// follower silently sitting past the new end of file.
+func followLog(out io.Writer, path string, f *os.File) error {
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadString('\n')
@@ -190,6 +193,12 @@ func followLog(out io.Writer, f *os.File) error {
 			fmt.Fprint(out, colorizeLog(strings.TrimRight(line, "\n"))+"\n")
 		}
 		if err == io.EOF {
+			if newF, ok := reopenIfRotated(path, f); ok {
+				f.Close()
+				f = newF
+				reader = bufio.NewReader(f)
+				continue
+			}
 			// Nothing new; wait rather than spinning on the file.
 			time.Sleep(300 * time.Millisecond)
 			continue
@@ -198,6 +207,36 @@ func followLog(out io.Writer, f *os.File) error {
 			return err
 		}
 	}
+}
+
+// reopenIfRotated detects a restart that truncated or replaced the file at
+// path out from under f — its size dropping below f's read offset, or its
+// inode no longer matching — and if so opens path fresh from the start.
+func reopenIfRotated(path string, f *os.File) (*os.File, bool) {
+	pathInfo, err := os.Stat(path)
+	if err != nil {
+		return nil, false
+	}
+	curInfo, err := f.Stat()
+	if err != nil {
+		return nil, false
+	}
+	rotated := !os.SameFile(pathInfo, curInfo)
+	if !rotated {
+		off, err := f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, false
+		}
+		rotated = pathInfo.Size() < off
+	}
+	if !rotated {
+		return nil, false
+	}
+	newF, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	return newF, true
 }
 
 // colorizeLog tints a log line by severity, matching the console view.
