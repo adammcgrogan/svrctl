@@ -64,6 +64,7 @@ func NewRoot() *cobra.Command {
 		newEditCmd(),
 		newPropertiesCmd(),
 		newBackupCmd(),
+		newPluginCmd(),
 		newLegacyServerCmd(),
 		newHiddenRunCmd(),
 	)

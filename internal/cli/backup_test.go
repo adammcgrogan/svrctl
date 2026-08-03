@@ -128,4 +128,3 @@ func TestResolveBackupErrorsWhenNoneExist(t *testing.T) {
 		t.Error("expected an error when no backups exist")
 	}
 }
-

@@ -3,6 +3,7 @@ package fetch
 import (
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -16,7 +17,7 @@ import (
 // which VerifyFile treats as a no-op rather than a failure — not every
 // source publishes one.
 type Checksum struct {
-	Algo string // "sha1" or "sha256"
+	Algo string // "sha1", "sha256", or "sha512"
 	Hex  string
 }
 
@@ -34,6 +35,8 @@ func VerifyFile(path string, c Checksum) error {
 		h = sha1.New()
 	case "sha256":
 		h = sha256.New()
+	case "sha512":
+		h = sha512.New()
 	default:
 		return fmt.Errorf("unsupported checksum algorithm %q", c.Algo)
 	}

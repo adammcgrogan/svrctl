@@ -18,6 +18,17 @@ func TestVerifyFileAcceptsMatchingChecksum(t *testing.T) {
 	}
 }
 
+func TestVerifyFileAcceptsMatchingSha512(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := Checksum{Algo: "sha512", Hex: "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043"}
+	if err := VerifyFile(path, c); err != nil {
+		t.Errorf("expected matching sha512 checksum to pass, got %v", err)
+	}
+}
+
 func TestVerifyFileRejectsMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f")
 	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {

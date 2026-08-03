@@ -56,6 +56,7 @@ server name, to act on every server tagged with `svrctl create --group`/`svrctl 
 | `svrctl edit <name>` | Change a server's memory or port after creation |
 | `svrctl properties <name> [key] [value]` | List, get, or set `server.properties` settings |
 | `svrctl backup create/list/restore <name>` | Snapshot and restore a server's world data |
+| `svrctl plugin search/install/list/update/remove` | Manage Modrinth plugins on a paper server |
 | `svrctl remove <name>` | Unregister a server (`--purge` to also delete its files) |
 
 Every command takes `--json` where a machine might read the output, and
@@ -75,5 +76,6 @@ svrctl keeps three things on disk, all in OS-standard locations:
 
 ## Scope
 
-Runs on macOS, Linux, and Windows. Vanilla and Paper are supported today;
-no plugin or mod management yet.
+Runs on macOS, Linux, and Windows. Vanilla and Paper are supported today.
+Plugin management (`svrctl plugin`) works on paper servers via Modrinth; no
+mod loader (Fabric/Forge) support yet.
