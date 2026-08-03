@@ -61,6 +61,7 @@ func NewRoot() *cobra.Command {
 		newLogsCmd(),
 		newVersionsCmd(),
 		newRemoveCmd(),
+		newEditCmd(),
 		newLegacyServerCmd(),
 		newHiddenRunCmd(),
 	)
@@ -87,6 +88,7 @@ func newLegacyServerCmd() *cobra.Command {
 		newCmdCmd(),
 		newLogsCmd(),
 		newRemoveCmd(),
+		newEditCmd(),
 	)
 	return server
 }
