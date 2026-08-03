@@ -5,6 +5,7 @@ package registry
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -34,13 +35,33 @@ func Load(path string) (*Registry, error) {
 	return &reg, nil
 }
 
-// Save writes the registry to path.
+// Save writes the registry to path. The write is atomic — data is written to
+// a temp file in the same directory and renamed into place — so a crash or
+// power loss mid-write can never leave a truncated or invalid registry.
 func (r *Registry) Save(path string) error {
 	data, err := yaml.Marshal(r)
 	if err != nil {
 		return fmt.Errorf("encoding registry: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".servers-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("writing registry: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing registry: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("writing registry: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return fmt.Errorf("writing registry: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("writing registry: %w", err)
 	}
 	return nil

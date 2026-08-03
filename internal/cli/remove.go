@@ -11,6 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/adammcgrogan/svrctl/internal/paths"
+	"github.com/adammcgrogan/svrctl/internal/registry"
 	"github.com/adammcgrogan/svrctl/internal/ui"
 )
 
@@ -78,23 +80,28 @@ func newRemoveCmd() *cobra.Command {
 // caller's earlier look, since the dashboard's confirmation step leaves a
 // window for the server to have started or vanished in the meantime.
 func removeServer(name string, purge bool) error {
-	reg, regPath, err := loadRegistry()
+	regPath, err := paths.RegistryFile()
 	if err != nil {
 		return err
 	}
-	s, ok := reg.Get(name)
-	if !ok {
-		return unknownServerError(reg, name)
-	}
-	v := buildView(name, s)
-	if v.running() {
-		return fmt.Errorf("%q is running — stop it first with `svrctl stop %s`", name, name)
-	}
 
-	reg.Remove(name)
-	if err := reg.Save(regPath); err != nil {
+	var s registry.Server
+	err = registry.WithLock(regPath, func(reg *registry.Registry) error {
+		var ok bool
+		s, ok = reg.Get(name)
+		if !ok {
+			return unknownServerError(reg, name)
+		}
+		if v := buildView(name, s); v.running() {
+			return fmt.Errorf("%q is running — stop it first with `svrctl stop %s`", name, name)
+		}
+		reg.Remove(name)
+		return nil
+	})
+	if err != nil {
 		return err
 	}
+
 	if purge {
 		if err := os.RemoveAll(s.Path); err != nil {
 			return fmt.Errorf("deleting server files: %w", err)

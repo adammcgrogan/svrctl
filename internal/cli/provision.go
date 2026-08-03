@@ -12,6 +12,7 @@ import (
 
 	"github.com/adammcgrogan/svrctl/internal/fetch"
 	"github.com/adammcgrogan/svrctl/internal/javamgr"
+	"github.com/adammcgrogan/svrctl/internal/paths"
 	"github.com/adammcgrogan/svrctl/internal/registry"
 	"github.com/adammcgrogan/svrctl/internal/serverkind"
 )
@@ -172,13 +173,21 @@ func Provision(spec ProvisionSpec, hooks ProvisionHooks) (registry.Server, error
 		Memory:  spec.Memory,
 	}
 
-	reg, regPath, err := loadRegistry()
+	regPath, err := paths.RegistryFile()
 	if err != nil {
 		rollback()
 		return zero, err
 	}
-	reg.Put(spec.Name, s)
-	if err := reg.Save(regPath); err != nil {
+	err = registry.WithLock(regPath, func(reg *registry.Registry) error {
+		// Re-check under the lock: another svrctl process could have
+		// registered this name while this one was downloading.
+		if _, exists := reg.Get(spec.Name); exists {
+			return fmt.Errorf("a server named %q already exists", spec.Name)
+		}
+		reg.Put(spec.Name, s)
+		return nil
+	})
+	if err != nil {
 		rollback()
 		return zero, err
 	}
