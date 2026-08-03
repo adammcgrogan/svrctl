@@ -9,11 +9,26 @@ package fetch
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sync/atomic"
 	"time"
 )
+
+// Client is used for every outbound HTTP request svrctl makes. Without a
+// timeout, a stalled upstream — one that accepts the connection but never
+// sends a response — hangs the command indefinitely with no way to cancel
+// short of killing the process. ResponseHeaderTimeout bounds how long we'll
+// wait for that first byte back; once headers arrive, a large download is
+// still free to run at whatever speed the connection allows rather than
+// being cut off by an overall deadline.
+var Client = &http.Client{
+	Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
 
 // Progress is a snapshot of a download. Total is 0 when the server did not
 // send a Content-Length, in which case only Done is meaningful and the caller
@@ -47,7 +62,7 @@ const reportInterval = 80 * time.Millisecond
 // Open issues a GET and returns the body along with its advertised size.
 // The caller must close the returned reader.
 func Open(url string) (io.ReadCloser, int64, error) {
-	resp, err := http.Get(url)
+	resp, err := Client.Get(url)
 	if err != nil {
 		return nil, 0, fmt.Errorf("downloading %s: %w", url, err)
 	}

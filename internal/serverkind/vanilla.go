@@ -39,7 +39,7 @@ type versionMeta struct {
 
 // getJSON fetches and decodes a JSON document into a fresh T.
 func getJSON[T any](url string) (*T, error) {
-	resp, err := http.Get(url)
+	resp, err := fetch.Client.Get(url)
 	if err != nil {
 		return nil, err
 	}

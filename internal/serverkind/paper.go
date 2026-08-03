@@ -5,7 +5,6 @@ package serverkind
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +30,7 @@ type paperBuild struct {
 }
 
 func (Paper) ResolveDownload(version string) (Download, error) {
-	resp, err := http.Get(fmt.Sprintf("%s/versions/%s/builds", paperAPIBase, version))
+	resp, err := fetch.Client.Get(fmt.Sprintf("%s/versions/%s/builds", paperAPIBase, version))
 	if err != nil {
 		return Download{}, fmt.Errorf("fetching paper builds: %w", err)
 	}

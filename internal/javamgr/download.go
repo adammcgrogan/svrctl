@@ -56,7 +56,7 @@ func fetchAdoptiumAsset(major int, osName, archName string) (adoptiumAsset, erro
 	url := fmt.Sprintf("%s/%d/hotspot?os=%s&architecture=%s&image_type=jdk&jvm_impl=hotspot&vendor=eclipse",
 		adoptiumAssetsURL, major, osName, archName)
 
-	resp, err := http.Get(url)
+	resp, err := fetch.Client.Get(url)
 	if err != nil {
 		return adoptiumAsset{}, fmt.Errorf("looking up JDK %d: %w", major, err)
 	}
