@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/adammcgrogan/svrctl/internal/paths"
+	"github.com/adammcgrogan/svrctl/internal/registry"
 )
 
 func TestValidateNameRejectsUnusableNames(t *testing.T) {
@@ -123,6 +126,26 @@ func TestPromptEULARequiresAffirmative(t *testing.T) {
 		if err := promptEULA(strings.NewReader(answer), io.Discard); err == nil {
 			t.Errorf("%q was treated as acceptance", answer)
 		}
+	}
+}
+
+func TestCheckPathAvailableRejectsAPathAnotherServerOwns(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	regPath, err := paths.RegistryFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := &registry.Registry{Servers: map[string]registry.Server{}}
+	reg.Put("foo", registry.Server{Type: "vanilla", Version: "1.21.1", Path: "/tmp/shared"})
+	if err := reg.Save(regPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckPathAvailable("/tmp/shared"); err == nil {
+		t.Fatal("expected a path collision with server \"foo\" to be rejected")
+	}
+	if err := CheckPathAvailable("/tmp/not-shared"); err != nil {
+		t.Errorf("expected an unused path to be accepted, got %v", err)
 	}
 }
 

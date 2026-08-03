@@ -90,6 +90,23 @@ func CheckNameAvailable(name string) error {
 	return nil
 }
 
+// CheckPathAvailable reports whether absPath already belongs to a registered
+// server. Two servers sharing a directory would also share server.jar and
+// the runner's .svrctl state, so starting, stopping, or purging either one
+// would corrupt the other.
+func CheckPathAvailable(absPath string) error {
+	reg, _, err := loadRegistry()
+	if err != nil {
+		return err
+	}
+	for name, s := range reg.Servers {
+		if filepath.Clean(s.Path) == filepath.Clean(absPath) {
+			return fmt.Errorf("%q is already used by server %q", absPath, name)
+		}
+	}
+	return nil
+}
+
 // Provision creates the server described by spec: it makes the directory,
 // downloads the jar, caches the JDK, writes the EULA and port, and registers
 // the result. If anything fails partway, a directory Provision created is
@@ -112,6 +129,9 @@ func Provision(spec ProvisionSpec, hooks ProvisionHooks) (registry.Server, error
 	}
 	absPath, err := filepath.Abs(path)
 	if err != nil {
+		return zero, err
+	}
+	if err := CheckPathAvailable(absPath); err != nil {
 		return zero, err
 	}
 
@@ -185,9 +205,14 @@ func Provision(spec ProvisionSpec, hooks ProvisionHooks) (registry.Server, error
 	}
 	err = registry.WithLock(regPath, func(reg *registry.Registry) error {
 		// Re-check under the lock: another svrctl process could have
-		// registered this name while this one was downloading.
+		// registered this name or path while this one was downloading.
 		if _, exists := reg.Get(spec.Name); exists {
 			return fmt.Errorf("a server named %q already exists", spec.Name)
+		}
+		for other, existing := range reg.Servers {
+			if filepath.Clean(existing.Path) == filepath.Clean(absPath) {
+				return fmt.Errorf("%q is already used by server %q", absPath, other)
+			}
 		}
 		reg.Put(spec.Name, s)
 		return nil
