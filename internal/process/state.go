@@ -121,12 +121,22 @@ func readRunError(serverDir string) (string, bool) {
 // its child exiting leaves the child reparented and still holding the
 // world's session lock, so treating the runner's death alone as "stopped"
 // would let a second `start` collide with the orphan.
+//
+// A live PID alone isn't proof, though — after an unclean shutdown (crash,
+// an out-of-band kill, a reboot that skipped cleanup) the OS can hand that
+// PID to an unrelated process before svrctl next looks. Since the runner is
+// the process that gets to say what's actually listening on the recorded
+// control-socket port, a bare PID match for it is confirmed by checking that
+// socket answers to the token we handed it; if it doesn't, that PID has been
+// reassigned and doesn't count.
 func IsRunning(serverDir string) (*RunState, bool) {
 	st, ok := ReadRunState(serverDir)
 	if !ok {
 		return nil, false
 	}
-	if processAlive(st.PID) || (st.ChildPID != 0 && processAlive(st.ChildPID)) {
+	runnerAlive := processAlive(st.PID) && verifyControlSocket(st)
+	childAlive := st.ChildPID != 0 && processAlive(st.ChildPID)
+	if runnerAlive || childAlive {
 		return st, true
 	}
 	clearRunState(serverDir)
