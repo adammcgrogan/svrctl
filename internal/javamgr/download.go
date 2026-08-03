@@ -1,17 +1,31 @@
-// download resolves the Adoptium (Eclipse Temurin) binary URL for the current
-// OS/arch and fetches it into a cache directory.
+// download resolves the Adoptium (Eclipse Temurin) binary URL and published
+// checksum for the current OS/arch, and fetches it into a cache directory.
 package javamgr
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
 	"runtime"
-	"strconv"
 
 	"github.com/adammcgrogan/svrctl/internal/fetch"
 )
 
-// adoptiumBinaryURL is a var (not const) so tests can point it at a fake server.
-var adoptiumBinaryURL = "https://api.adoptium.net/v3/binary/latest"
+// adoptiumAssetsURL is a var (not const) so tests can point it at a fake server.
+var adoptiumAssetsURL = "https://api.adoptium.net/v3/assets/latest"
+
+// adoptiumAsset is the shape of one entry in the assets/latest response,
+// trimmed to the fields svrctl needs: where to download the archive and the
+// sha256 to verify it against before it's extracted and run.
+type adoptiumAsset struct {
+	Binary struct {
+		Package struct {
+			Link     string `json:"link"`
+			Checksum string `json:"checksum"`
+		} `json:"package"`
+	} `json:"binary"`
+}
 
 func adoptiumOS() (string, error) {
 	switch runtime.GOOS {
@@ -37,6 +51,30 @@ func adoptiumArch() (string, error) {
 	}
 }
 
+// fetchAdoptiumAsset looks up the latest GA Temurin JDK build for major/os/arch.
+func fetchAdoptiumAsset(major int, osName, archName string) (adoptiumAsset, error) {
+	url := fmt.Sprintf("%s/%d/hotspot?os=%s&architecture=%s&image_type=jdk&jvm_impl=hotspot&vendor=eclipse",
+		adoptiumAssetsURL, major, osName, archName)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return adoptiumAsset{}, fmt.Errorf("looking up JDK %d: %w", major, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return adoptiumAsset{}, fmt.Errorf("looking up JDK %d: unexpected status %s", major, resp.Status)
+	}
+
+	var assets []adoptiumAsset
+	if err := json.NewDecoder(resp.Body).Decode(&assets); err != nil {
+		return adoptiumAsset{}, fmt.Errorf("parsing JDK %d metadata: %w", major, err)
+	}
+	if len(assets) == 0 {
+		return adoptiumAsset{}, fmt.Errorf("no Temurin JDK %d build found for %s/%s", major, osName, archName)
+	}
+	return assets[0], nil
+}
+
 func downloadAndExtractJDK(major int, destDir string, report fetch.Reporter) error {
 	osName, err := adoptiumOS()
 	if err != nil {
@@ -52,21 +90,41 @@ func downloadAndExtractJDK(major int, destDir string, report fetch.Reporter) err
 		archName = "x64"
 	}
 
-	url := fmt.Sprintf("%s/%s/ga/%s/%s/jdk/hotspot/normal/eclipse",
-		adoptiumBinaryURL, strconv.Itoa(major), osName, archName)
+	asset, err := fetchAdoptiumAsset(major, osName, archName)
+	if err != nil {
+		return err
+	}
+	pkg := asset.Binary.Package
+	if pkg.Link == "" {
+		return fmt.Errorf("JDK %d metadata for %s/%s has no download link", major, osName, archName)
+	}
 
-	body, total, err := fetch.Open(url)
+	// Downloaded to a temp file rather than streamed straight into the
+	// extractor so the checksum can be verified before anything from the
+	// archive is trusted or written to disk.
+	tmp, err := os.CreateTemp("", "svrctl-jdk-*.archive")
 	if err != nil {
 		return fmt.Errorf("downloading JDK %d: %w", major, err)
 	}
-	defer body.Close()
+	tmpPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpPath)
 
-	// The archive is extracted as it streams, so progress tracks bytes pulled
-	// off the wire rather than files written — which is what the wait is.
-	src := fetch.Reader(body, total, report)
+	if err := fetch.ToFile(pkg.Link, tmpPath, report); err != nil {
+		return fmt.Errorf("downloading JDK %d: %w", major, err)
+	}
+	if err := fetch.VerifyFile(tmpPath, fetch.Checksum{Algo: "sha256", Hex: pkg.Checksum}); err != nil {
+		return fmt.Errorf("verifying JDK %d download: %w", major, err)
+	}
+
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		return fmt.Errorf("reading JDK %d archive: %w", major, err)
+	}
+	defer f.Close()
 
 	if osName == "windows" {
-		return extractZip(src, destDir)
+		return extractZip(f, destDir)
 	}
-	return extractTarGz(src, destDir)
+	return extractTarGz(f, destDir)
 }

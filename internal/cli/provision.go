@@ -130,16 +130,21 @@ func Provision(spec ProvisionSpec, hooks ProvisionHooks) (registry.Server, error
 	}
 
 	hooks.phase(fmt.Sprintf("Finding %s %s", spec.Kind, spec.Version))
-	downloadURL, err := resolver.ResolveDownloadURL(spec.Version)
+	download, err := resolver.ResolveDownload(spec.Version)
 	if err != nil {
 		rollback()
 		return zero, err
 	}
 
 	hooks.phase("Downloading server.jar")
-	if err := fetch.ToFile(downloadURL, filepath.Join(absPath, "server.jar"), hooks.reporter()); err != nil {
+	jarPath := filepath.Join(absPath, "server.jar")
+	if err := fetch.ToFile(download.URL, jarPath, hooks.reporter()); err != nil {
 		rollback()
 		return zero, err
+	}
+	if err := fetch.VerifyFile(jarPath, download.Checksum); err != nil {
+		rollback()
+		return zero, fmt.Errorf("verifying server.jar: %w", err)
 	}
 
 	major, err := resolver.RequiredJavaMajor(spec.Version)

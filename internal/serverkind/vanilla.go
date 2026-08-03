@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/adammcgrogan/svrctl/internal/fetch"
 )
 
 // mojangManifestURL is a var (not const) so tests can point it at a fake server.
@@ -26,7 +28,8 @@ type manifest struct {
 type versionMeta struct {
 	Downloads struct {
 		Server struct {
-			URL string `json:"url"`
+			URL  string `json:"url"`
+			Sha1 string `json:"sha1"`
 		} `json:"server"`
 	} `json:"downloads"`
 	JavaVersion struct {
@@ -87,15 +90,18 @@ func fetchVersionMeta(version string) (*versionMeta, error) {
 	return vm, nil
 }
 
-func (Vanilla) ResolveDownloadURL(version string) (string, error) {
+func (Vanilla) ResolveDownload(version string) (Download, error) {
 	vm, err := fetchVersionMeta(version)
 	if err != nil {
-		return "", err
+		return Download{}, err
 	}
 	if vm.Downloads.Server.URL == "" {
-		return "", fmt.Errorf("no server jar published for minecraft version %q", version)
+		return Download{}, fmt.Errorf("no server jar published for minecraft version %q", version)
 	}
-	return vm.Downloads.Server.URL, nil
+	return Download{
+		URL:      vm.Downloads.Server.URL,
+		Checksum: fetch.Checksum{Algo: "sha1", Hex: vm.Downloads.Server.Sha1},
+	}, nil
 }
 
 func (Vanilla) RequiredJavaMajor(version string) (int, error) {

@@ -29,9 +29,10 @@ func withFakePaperServer(t *testing.T) {
 				"id":      10,
 				"channel": "STABLE",
 				"downloads": map[string]any{
-					"server:default": map[string]string{
-						"name": "paper-1.21.1-10.jar",
-						"url":  "https://example.com/paper-1.21.1-10.jar",
+					"server:default": map[string]any{
+						"name":      "paper-1.21.1-10.jar",
+						"url":       "https://example.com/paper-1.21.1-10.jar",
+						"checksums": map[string]string{"sha256": "cafef00d"},
 					},
 				},
 			},
@@ -45,15 +46,18 @@ func withFakePaperServer(t *testing.T) {
 	t.Cleanup(func() { paperAPIBase = orig })
 }
 
-func TestPaperResolveDownloadURLPrefersStableChannel(t *testing.T) {
+func TestPaperResolveDownloadPrefersStableChannel(t *testing.T) {
 	withFakePaperServer(t)
 
-	got, err := Paper{}.ResolveDownloadURL("1.21.1")
+	got, err := Paper{}.ResolveDownload("1.21.1")
 	if err != nil {
-		t.Fatalf("ResolveDownloadURL: %v", err)
+		t.Fatalf("ResolveDownload: %v", err)
 	}
-	if want := "https://example.com/paper-1.21.1-10.jar"; got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if want := "https://example.com/paper-1.21.1-10.jar"; got.URL != want {
+		t.Errorf("got %q, want %q", got.URL, want)
+	}
+	if got.Checksum.Algo != "sha256" || got.Checksum.Hex != "cafef00d" {
+		t.Errorf("got checksum %+v, want sha256:cafef00d", got.Checksum)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/adammcgrogan/svrctl/internal/fetch"
 )
 
 // paperAPIBase is a var (not const) so tests can point it at a fake server.
@@ -22,24 +24,25 @@ type paperBuild struct {
 	ID        int    `json:"id"`
 	Channel   string `json:"channel"`
 	Downloads map[string]struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
+		Name      string            `json:"name"`
+		URL       string            `json:"url"`
+		Checksums map[string]string `json:"checksums"`
 	} `json:"downloads"`
 }
 
-func (Paper) ResolveDownloadURL(version string) (string, error) {
+func (Paper) ResolveDownload(version string) (Download, error) {
 	resp, err := http.Get(fmt.Sprintf("%s/versions/%s/builds", paperAPIBase, version))
 	if err != nil {
-		return "", fmt.Errorf("fetching paper builds: %w", err)
+		return Download{}, fmt.Errorf("fetching paper builds: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var builds []paperBuild
 	if err := json.NewDecoder(resp.Body).Decode(&builds); err != nil {
-		return "", fmt.Errorf("parsing paper builds: %w", err)
+		return Download{}, fmt.Errorf("parsing paper builds: %w", err)
 	}
 	if len(builds) == 0 {
-		return "", fmt.Errorf("no paper builds found for minecraft version %q", version)
+		return Download{}, fmt.Errorf("no paper builds found for minecraft version %q", version)
 	}
 
 	// Builds are sorted newest-first; prefer the newest STABLE build, falling
@@ -54,9 +57,12 @@ func (Paper) ResolveDownloadURL(version string) (string, error) {
 
 	dl, ok := best.Downloads["server:default"]
 	if !ok {
-		return "", fmt.Errorf("paper build %d for %q has no server download", best.ID, version)
+		return Download{}, fmt.Errorf("paper build %d for %q has no server download", best.ID, version)
 	}
-	return dl.URL, nil
+	return Download{
+		URL:      dl.URL,
+		Checksum: fetch.Checksum{Algo: "sha256", Hex: dl.Checksums["sha256"]},
+	}, nil
 }
 
 func (Paper) RequiredJavaMajor(version string) (int, error) {

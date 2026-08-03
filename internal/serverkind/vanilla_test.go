@@ -29,7 +29,10 @@ func newFakeMojangServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/version/1.21.1.json", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"downloads": map[string]any{
-				"server": map[string]string{"url": "https://example.com/server-1.21.1.jar"},
+				"server": map[string]string{
+					"url":  "https://example.com/server-1.21.1.jar",
+					"sha1": "deadbeef",
+				},
 			},
 			"javaVersion": map[string]int{"majorVersion": 21},
 		})
@@ -46,15 +49,18 @@ func withFakeMojangServer(t *testing.T) {
 	t.Cleanup(func() { mojangManifestURL = orig })
 }
 
-func TestVanillaResolveDownloadURL(t *testing.T) {
+func TestVanillaResolveDownload(t *testing.T) {
 	withFakeMojangServer(t)
 
-	got, err := Vanilla{}.ResolveDownloadURL("1.21.1")
+	got, err := Vanilla{}.ResolveDownload("1.21.1")
 	if err != nil {
-		t.Fatalf("ResolveDownloadURL: %v", err)
+		t.Fatalf("ResolveDownload: %v", err)
 	}
-	if want := "https://example.com/server-1.21.1.jar"; got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if want := "https://example.com/server-1.21.1.jar"; got.URL != want {
+		t.Errorf("got %q, want %q", got.URL, want)
+	}
+	if got.Checksum.Algo != "sha1" || got.Checksum.Hex != "deadbeef" {
+		t.Errorf("got checksum %+v, want sha1:deadbeef", got.Checksum)
 	}
 }
 
@@ -73,7 +79,7 @@ func TestVanillaRequiredJavaMajor(t *testing.T) {
 func TestVanillaUnknownVersion(t *testing.T) {
 	withFakeMojangServer(t)
 
-	if _, err := (Vanilla{}).ResolveDownloadURL("99.99"); err == nil {
+	if _, err := (Vanilla{}).ResolveDownload("99.99"); err == nil {
 		t.Errorf("expected error for unknown version")
 	}
 }
