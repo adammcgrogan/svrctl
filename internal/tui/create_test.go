@@ -297,6 +297,48 @@ func TestWizardSkipsQuestionsAlreadyAnsweredByFlag(t *testing.T) {
 	}
 }
 
+func TestWizardSkipsAMiddleAnswerWhenLaterQuestionsAreUnanswered(t *testing.T) {
+	// A flag answering a later question (--memory) shouldn't force the wizard
+	// to still ask it once the earlier, unanswered questions (name, type,
+	// version) have been worked through — only genuinely missing answers
+	// should stop the flow.
+	deps := testCreateDeps()
+	var provisioned CreateValues
+	deps.Provision = func(v CreateValues, _ func(string), _ func(int64, int64)) error {
+		provisioned = v
+		return nil
+	}
+
+	m := newCreateModel(deps, CreateValues{Memory: "4G"})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+	m = next.(createModel)
+
+	if m.step != stepName {
+		t.Fatalf("got step %v, want stepName", m.step)
+	}
+	m = typeText(m, "survival")
+	m = send(m, enter)       // name
+	m = send(m, down, enter) // type: second entry, paper
+	m = send(m, versionsMsg{versions: []string{"1.21.4", "1.21.1"}})
+	m = send(m, down, enter) // version: second entry, 1.21.1
+
+	if m.step != stepPort {
+		t.Fatalf("got step %v, want stepPort — the memory question was already answered by flag", m.step)
+	}
+
+	m = send(m, enter) // port: blank, Minecraft's default
+
+	if m.step != stepReview {
+		t.Fatalf("got step %v, want stepReview", m.step)
+	}
+
+	m = sendRunning(m, enter)
+	want := CreateValues{Name: "survival", Kind: "paper", Version: "1.21.1", Memory: "4G"}
+	if provisioned != want {
+		t.Errorf("provisioned %+v, want %+v", provisioned, want)
+	}
+}
+
 func TestWizardStillAsksForAnUnusablePrefilledName(t *testing.T) {
 	m := newCreateModel(testCreateDeps(), CreateValues{Name: "taken", Kind: "paper"})
 

@@ -145,20 +145,37 @@ func newCreateModel(deps CreateDeps, prefill CreateValues) createModel {
 // command line. Asking someone to re-enter a name they just typed is the kind
 // of thing that makes a wizard feel like an obstacle rather than a shortcut.
 func firstUnansweredStep(deps CreateDeps, v CreateValues) step {
-	if v.Name == "" || deps.ValidateName(v.Name) != nil {
-		return stepName
-	}
-	if v.Kind == "" {
-		return stepKind
-	}
-	if v.Version == "" {
-		return stepVersion
-	}
-	if v.Memory == "" {
-		return stepMemory
-	}
-	if v.Port == 0 {
-		return stepPort
+	return nextUnansweredStep(deps, v, stepName)
+}
+
+// nextUnansweredStep walks the steps starting at from and returns the first
+// one not already satisfied by v, so a flag-supplied answer is skipped no
+// matter where in the sequence it falls — not just when every step before it
+// also happens to be answered.
+func nextUnansweredStep(deps CreateDeps, v CreateValues, from step) step {
+	for s := from; s <= stepPort; s++ {
+		switch s {
+		case stepName:
+			if v.Name == "" || deps.ValidateName(v.Name) != nil {
+				return stepName
+			}
+		case stepKind:
+			if v.Kind == "" {
+				return stepKind
+			}
+		case stepVersion:
+			if v.Version == "" {
+				return stepVersion
+			}
+		case stepMemory:
+			if v.Memory == "" {
+				return stepMemory
+			}
+		case stepPort:
+			if v.Port == 0 {
+				return stepPort
+			}
+		}
 	}
 	return stepReview
 }
@@ -328,7 +345,7 @@ func (m createModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.values.Name = name
-			m.step = stepKind
+			m.step = nextUnansweredStep(m.deps, m.values, stepKind)
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -345,7 +362,11 @@ func (m createModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.values.Kind = it.Title
-			m.step = stepVersion
+			next := nextUnansweredStep(m.deps, m.values, stepVersion)
+			m.step = next
+			if next != stepVersion {
+				return m, nil
+			}
 			m.versionsLoading = true
 			m.verPick.setItems(nil)
 			return m, m.loadVersions(it.Title)
@@ -365,7 +386,7 @@ func (m createModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.values.Version = it.Title
-			m.step = stepMemory
+			m.step = nextUnansweredStep(m.deps, m.values, stepMemory)
 			return m, nil
 		}
 		return m, nil
@@ -384,7 +405,11 @@ func (m createModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.values.Memory = it.Title
 			}
-			m.step = stepPort
+			next := nextUnansweredStep(m.deps, m.values, stepPort)
+			m.step = next
+			if next != stepPort {
+				return m, nil
+			}
 			m.portInput.Focus()
 			return m, textinput.Blink
 		}
