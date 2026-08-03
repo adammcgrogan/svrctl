@@ -5,6 +5,7 @@ package serverkind
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,6 +36,9 @@ func (Paper) ResolveDownload(version string) (Download, error) {
 		return Download{}, fmt.Errorf("fetching paper builds: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Download{}, fmt.Errorf("fetching paper builds: unexpected status %s", resp.Status)
+	}
 
 	var builds []paperBuild
 	if err := json.NewDecoder(resp.Body).Decode(&builds); err != nil {

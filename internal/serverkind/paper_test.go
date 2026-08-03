@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +59,27 @@ func TestPaperResolveDownloadPrefersStableChannel(t *testing.T) {
 	}
 	if got.Checksum.Algo != "sha256" || got.Checksum.Hex != "cafef00d" {
 		t.Errorf("got checksum %+v, want sha256:cafef00d", got.Checksum)
+	}
+}
+
+func TestPaperResolveDownloadReportsUnexpectedStatus(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/versions/0.0.0-does-not-exist/builds", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	orig := paperAPIBase
+	paperAPIBase = srv.URL
+	t.Cleanup(func() { paperAPIBase = orig })
+
+	_, err := Paper{}.ResolveDownload("0.0.0-does-not-exist")
+	if err == nil {
+		t.Fatal("expected an error for a 404 response, got nil")
+	}
+	if want := "unexpected status 404"; !strings.Contains(err.Error(), want) {
+		t.Errorf("got error %q, want it to contain %q", err.Error(), want)
 	}
 }
 
