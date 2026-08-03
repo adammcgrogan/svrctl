@@ -38,6 +38,12 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "enter":
 		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -297,5 +303,263 @@ func TestDashboardShrinksCursorWhenServersDisappear(t *testing.T) {
 	}
 	if view := m.View(); strings.Contains(view, "survival") {
 		t.Errorf("removed server still shown:\n%s", view)
+	}
+}
+
+func TestDashboardShowsGroupColumnWhenAnyServerHasOne(t *testing.T) {
+	m := dashboardModel{width: 100, height: 24}
+	next, _ := m.Update(rowsMsg{rows: []ServerRow{
+		{Name: "lobby", Type: "paper", Version: "1.21.1", Group: "network"},
+		{Name: "solo", Type: "vanilla", Version: "1.21.1"},
+	}})
+	m = next.(dashboardModel)
+
+	view := ui.StripANSI(m.View())
+	if !strings.Contains(view, "GROUP") || !strings.Contains(view, "network") {
+		t.Errorf("expected a GROUP column showing \"network\":\n%s", view)
+	}
+}
+
+func TestDashboardEditPrefillsCurrentMemoryAndPort(t *testing.T) {
+	m := newTestDashboard(DashboardDeps{})
+	m = press(m, "e") // cursor starts on "creative": no memory, port 25565
+
+	if m.mode != modeEdit {
+		t.Fatalf("expected modeEdit, got %v", m.mode)
+	}
+	if m.editMemory.Value() != "" {
+		t.Errorf("got memory %q, want empty", m.editMemory.Value())
+	}
+	if m.editPort.Value() != "25565" {
+		t.Errorf("got port %q, want 25565", m.editPort.Value())
+	}
+}
+
+func TestDashboardEditSubmitsMemoryAndPort(t *testing.T) {
+	var gotName, gotMemory string
+	var gotPort int
+	deps := DashboardDeps{
+		List: func() ([]ServerRow, error) { return testRows(), nil },
+		Edit: func(name, memory string, port int) error {
+			gotName, gotMemory, gotPort = name, memory, port
+			return nil
+		},
+	}
+
+	m := press(newTestDashboard(deps), "e", "4G", "tab")
+	next, cmd := m.Update(key("enter"))
+	m = next.(dashboardModel)
+	if m.mode != modeList {
+		t.Errorf("expected to return to modeList on submit, got %v", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to run the edit")
+	}
+
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	if gotName != "creative" || gotMemory != "4G" || gotPort != 25565 {
+		t.Errorf("got Edit(%q, %q, %d), want (creative, 4G, 25565)", gotName, gotMemory, gotPort)
+	}
+	if !strings.Contains(m.status, "updated creative") {
+		t.Errorf("got status %q, want it to mention the update", m.status)
+	}
+}
+
+func TestDashboardEditRejectsNonNumericPort(t *testing.T) {
+	m := press(newTestDashboard(DashboardDeps{}), "e", "tab",
+		"backspace", "backspace", "backspace", "backspace", "backspace", "abc")
+	m = press(m, "enter")
+
+	if m.mode != modeEdit {
+		t.Errorf("expected to stay in modeEdit after an invalid port, got %v", m.mode)
+	}
+	if m.editErr == "" {
+		t.Error("expected an error message for a non-numeric port")
+	}
+}
+
+func TestDashboardEditCancelReturnsToList(t *testing.T) {
+	m := press(newTestDashboard(DashboardDeps{}), "e", "esc")
+	if m.mode != modeList {
+		t.Errorf("expected esc to return to modeList, got %v", m.mode)
+	}
+}
+
+func testProps() (map[string]string, []string) {
+	return map[string]string{"motd": "Hello", "max-players": "20"}, []string{"motd", "max-players"}
+}
+
+func TestDashboardPropertiesListsThenEditsSelectedValue(t *testing.T) {
+	var gotName, gotKey, gotValue string
+	deps := DashboardDeps{
+		List: func() ([]ServerRow, error) { return testRows(), nil },
+		Properties: func(name string) (map[string]string, []string, error) {
+			props, order := testProps()
+			return props, order, nil
+		},
+		SetProperty: func(name, key, value string) error {
+			gotName, gotKey, gotValue = name, key, value
+			return nil
+		},
+	}
+
+	m := newTestDashboard(deps)
+	next, cmd := m.Update(key("p"))
+	m = next.(dashboardModel)
+	if m.mode != modeProperties {
+		t.Fatalf("expected modeProperties, got %v", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to load properties")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	view := ui.StripANSI(m.View())
+	if !strings.Contains(view, "motd") {
+		t.Errorf("expected the properties list to show motd:\n%s", view)
+	}
+
+	// Enter on the first entry ("motd") opens its value for editing.
+	next, _ = m.Update(key("enter"))
+	m = next.(dashboardModel)
+	if m.mode != modePropertyEdit {
+		t.Fatalf("expected modePropertyEdit, got %v", m.mode)
+	}
+	if m.propValueInput.Value() != "Hello" {
+		t.Errorf("got prefilled value %q, want Hello", m.propValueInput.Value())
+	}
+
+	next, _ = m.Update(key("!"))
+	m = next.(dashboardModel)
+	next, cmd = m.Update(key("enter"))
+	m = next.(dashboardModel)
+	if m.mode != modeProperties {
+		t.Errorf("expected to return to modeProperties on submit, got %v", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to save the property")
+	}
+
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	if gotName != "creative" || gotKey != "motd" || gotValue != "Hello!" {
+		t.Errorf("got SetProperty(%q, %q, %q), want (creative, motd, Hello!)", gotName, gotKey, gotValue)
+	}
+	if !strings.Contains(m.status, "set motd") {
+		t.Errorf("got status %q, want it to mention motd", m.status)
+	}
+}
+
+func TestDashboardPropertiesEscReturnsToList(t *testing.T) {
+	deps := DashboardDeps{
+		List: func() ([]ServerRow, error) { return testRows(), nil },
+		Properties: func(name string) (map[string]string, []string, error) {
+			props, order := testProps()
+			return props, order, nil
+		},
+	}
+	next, cmd := newTestDashboard(deps).Update(key("p"))
+	m := next.(dashboardModel)
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	next, _ = m.Update(key("esc"))
+	m = next.(dashboardModel)
+	if m.mode != modeList {
+		t.Errorf("expected esc to return to modeList, got %v", m.mode)
+	}
+}
+
+func testBackups() []BackupRow {
+	return []BackupRow{{ID: "2026-01-02T00-00-00", SizeBytes: 1024, CreatedAt: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)}}
+}
+
+func TestDashboardBackupsListsAndCreates(t *testing.T) {
+	var created string
+	deps := DashboardDeps{
+		List:         func() ([]ServerRow, error) { return testRows(), nil },
+		Backups:      func(name string) ([]BackupRow, error) { return testBackups(), nil },
+		CreateBackup: func(name string) error { created = name; return nil },
+	}
+
+	next, cmd := newTestDashboard(deps).Update(key("b"))
+	m := next.(dashboardModel)
+	if m.mode != modeBackups {
+		t.Fatalf("expected modeBackups, got %v", m.mode)
+	}
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	view := ui.StripANSI(m.View())
+	if !strings.Contains(view, "2026-01-02T00-00-00") {
+		t.Errorf("expected the backup list to show the backup ID:\n%s", view)
+	}
+
+	next, cmd = m.Update(key("c"))
+	m = next.(dashboardModel)
+	if cmd == nil {
+		t.Fatal("expected a command to create the backup")
+	}
+	m.Update(cmd())
+
+	if created != "creative" {
+		t.Errorf("got created %q, want creative", created)
+	}
+}
+
+func TestDashboardBackupsRestoreRequiresConfirmation(t *testing.T) {
+	var gotName, gotID string
+	deps := DashboardDeps{
+		List:    func() ([]ServerRow, error) { return testRows(), nil },
+		Backups: func(name string) ([]BackupRow, error) { return testBackups(), nil },
+		RestoreBackup: func(name, id string) error {
+			gotName, gotID = name, id
+			return nil
+		},
+	}
+
+	next, cmd := newTestDashboard(deps).Update(key("b"))
+	m := next.(dashboardModel)
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	// Enter on the selected backup asks for confirmation rather than
+	// restoring immediately.
+	next, _ = m.Update(key("enter"))
+	m = next.(dashboardModel)
+	if m.mode != modeConfirmRestore {
+		t.Fatalf("expected modeConfirmRestore, got %v", m.mode)
+	}
+
+	// esc backs out without restoring.
+	next, _ = m.Update(key("esc"))
+	m = next.(dashboardModel)
+	if m.mode != modeBackups {
+		t.Errorf("expected esc to cancel back to modeBackups, got %v", m.mode)
+	}
+
+	// Ask again and confirm with "y".
+	next, _ = m.Update(key("enter"))
+	m = next.(dashboardModel)
+	next, cmd = m.Update(key("y"))
+	m = next.(dashboardModel)
+	if m.mode != modeList {
+		t.Errorf("expected to return to modeList after confirming, got %v", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to run the restore")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	if gotName != "creative" || gotID != "2026-01-02T00-00-00" {
+		t.Errorf("got RestoreBackup(%q, %q), want (creative, 2026-01-02T00-00-00)", gotName, gotID)
+	}
+	if !strings.Contains(m.status, "restored creative") {
+		t.Errorf("got status %q, want it to mention the restore", m.status)
 	}
 }

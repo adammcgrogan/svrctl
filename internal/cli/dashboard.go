@@ -18,6 +18,21 @@ func dashboardDeps() tui.DashboardDeps {
 		Stop:    stopServer,
 		Restart: func(name string) error { return restartServer(io.Discard, name) },
 		Remove:  removeServer,
+
+		Edit: func(name, memory string, port int) error {
+			_, err := editServer(name, &memory, nil, &port)
+			return err
+		},
+
+		Properties:  serverProperties,
+		SetProperty: func(name, key, value string) error { _, err := setServerProperty(name, key, value); return err },
+
+		Backups:      dashboardBackups,
+		CreateBackup: func(name string) error { _, err := createServerBackup(name, nil); return err },
+		RestoreBackup: func(name, id string) error {
+			_, err := restoreServerBackup(name, id)
+			return err
+		},
 	}
 }
 
@@ -34,6 +49,8 @@ func dashboardRows() ([]tui.ServerRow, error) {
 			Version: v.Server.Version,
 			Path:    v.Server.Path,
 			Port:    v.port(),
+			Memory:  v.Server.Memory,
+			Group:   v.Server.Group,
 			Running: v.running(),
 			Uptime:  v.Uptime,
 		}
@@ -41,6 +58,18 @@ func dashboardRows() ([]tui.ServerRow, error) {
 			row.PID = v.State.PID
 		}
 		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func dashboardBackups(name string) ([]tui.BackupRow, error) {
+	backups, err := listBackups(name)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]tui.BackupRow, len(backups))
+	for i, b := range backups {
+		rows[i] = tui.BackupRow{ID: b.ID, SizeBytes: b.SizeBytes, CreatedAt: b.CreatedAt}
 	}
 	return rows, nil
 }

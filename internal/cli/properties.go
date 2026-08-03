@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/adammcgrogan/svrctl/internal/registry"
 	"github.com/adammcgrogan/svrctl/internal/ui"
 )
 
@@ -28,16 +29,11 @@ func newPropertiesCmd() *cobra.Command {
 		ValidArgsFunction: completeServerNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			s, err := resolveServer(name)
-			if err != nil {
-				return err
-			}
-			propsPath := filepath.Join(s.Path, "server.properties")
 			out := cmd.OutOrStdout()
 
 			switch len(args) {
 			case 1:
-				props, order, err := readProperties(propsPath)
+				props, order, err := serverProperties(name)
 				if err != nil {
 					return err
 				}
@@ -50,7 +46,7 @@ func newPropertiesCmd() *cobra.Command {
 				return nil
 
 			case 2:
-				props, _, err := readProperties(propsPath)
+				props, _, err := serverProperties(name)
 				if err != nil {
 					return err
 				}
@@ -63,7 +59,8 @@ func newPropertiesCmd() *cobra.Command {
 
 			default:
 				key, value := args[1], args[2]
-				if err := setProperty(propsPath, key, value); err != nil {
+				s, err := setServerProperty(name, key, value)
+				if err != nil {
 					return err
 				}
 				ui.Okf(out, "Set %s = %s", ui.Strong.Render(key), value)
@@ -77,6 +74,29 @@ func newPropertiesCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print every setting as JSON (only when no key is given)")
 	return cmd
+}
+
+// serverProperties reads name's server.properties, shared by the `properties`
+// command and the dashboard's properties sub-mode.
+func serverProperties(name string) (map[string]string, []string, error) {
+	s, err := resolveServer(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	return readProperties(filepath.Join(s.Path, "server.properties"))
+}
+
+// setServerProperty writes key=value into name's server.properties, shared
+// by the `properties` command and the dashboard's properties sub-mode.
+func setServerProperty(name, key, value string) (registry.Server, error) {
+	s, err := resolveServer(name)
+	if err != nil {
+		return registry.Server{}, err
+	}
+	if err := setProperty(filepath.Join(s.Path, "server.properties"), key, value); err != nil {
+		return registry.Server{}, err
+	}
+	return s, nil
 }
 
 // readProperties parses server.properties into a key->value map plus the

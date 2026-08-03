@@ -29,45 +29,24 @@ func newEditCmd() *cobra.Command {
 			name := args[0]
 			out := cmd.OutOrStdout()
 
-			memoryChanged := cmd.Flags().Changed("memory")
-			portChanged := cmd.Flags().Changed("port")
-			groupChanged := cmd.Flags().Changed("group")
-			if !memoryChanged && !portChanged && !groupChanged {
+			var memoryChange, groupChange *string
+			var portChange *int
+			if cmd.Flags().Changed("memory") {
+				memoryChange = &memory
+			}
+			if cmd.Flags().Changed("port") {
+				portChange = &port
+			}
+			if cmd.Flags().Changed("group") {
+				groupChange = &group
+			}
+			if memoryChange == nil && portChange == nil && groupChange == nil {
 				return fmt.Errorf("nothing to change — pass --memory, --port, and/or --group")
 			}
 
-			regPath, err := paths.RegistryFile()
+			s, err := editServer(name, memoryChange, groupChange, portChange)
 			if err != nil {
 				return err
-			}
-
-			var s registry.Server
-			err = registry.WithLock(regPath, func(reg *registry.Registry) error {
-				var ok bool
-				s, ok = reg.Get(name)
-				if !ok {
-					return unknownServerError(reg, name)
-				}
-				if memoryChanged {
-					s.Memory = memory
-				}
-				if portChanged {
-					s.Port = port
-				}
-				if groupChanged {
-					s.Group = group
-				}
-				reg.Put(name, s)
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-
-			if portChanged {
-				if err := writeServerPort(s.Path, port); err != nil {
-					return fmt.Errorf("updating server.properties: %w", err)
-				}
 			}
 
 			ui.Okf(out, "Updated %s", ui.Strong.Render(name))
@@ -82,4 +61,44 @@ func newEditCmd() *cobra.Command {
 	cmd.Flags().IntVar(&port, "port", 0, "port to listen on")
 	cmd.Flags().StringVar(&group, "group", "", "tag this server so start/stop/restart --group can act on it with others (empty string clears it)")
 	return cmd
+}
+
+// editServer applies whichever of memory/group/port is non-nil to name's
+// registry entry, shared by the `edit` command and the dashboard's edit
+// sub-mode so the two don't drift apart.
+func editServer(name string, memory, group *string, port *int) (registry.Server, error) {
+	regPath, err := paths.RegistryFile()
+	if err != nil {
+		return registry.Server{}, err
+	}
+
+	var s registry.Server
+	err = registry.WithLock(regPath, func(reg *registry.Registry) error {
+		var ok bool
+		s, ok = reg.Get(name)
+		if !ok {
+			return unknownServerError(reg, name)
+		}
+		if memory != nil {
+			s.Memory = *memory
+		}
+		if port != nil {
+			s.Port = *port
+		}
+		if group != nil {
+			s.Group = *group
+		}
+		reg.Put(name, s)
+		return nil
+	})
+	if err != nil {
+		return registry.Server{}, err
+	}
+
+	if port != nil {
+		if err := writeServerPort(s.Path, *port); err != nil {
+			return registry.Server{}, fmt.Errorf("updating server.properties: %w", err)
+		}
+	}
+	return s, nil
 }

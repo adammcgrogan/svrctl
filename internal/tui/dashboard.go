@@ -8,10 +8,12 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/adammcgrogan/svrctl/internal/ui"
@@ -29,9 +31,18 @@ type ServerRow struct {
 	Version string
 	Path    string
 	Port    int
+	Memory  string
+	Group   string
 	Running bool
 	PID     int
 	Uptime  time.Duration
+}
+
+// BackupRow is one backup as the dashboard needs to display it.
+type BackupRow struct {
+	ID        string
+	SizeBytes int64
+	CreatedAt time.Time
 }
 
 // Action is what the user asked for as the dashboard closed. Actions that need
@@ -61,6 +72,24 @@ type DashboardDeps struct {
 	Restart func(name string) error
 	// Remove unregisters a server, deleting its files too when purge is set.
 	Remove func(name string, purge bool) error
+
+	// Edit changes a server's memory and/or port. An empty memory clears it;
+	// a zero port leaves the default in place.
+	Edit func(name, memory string, port int) error
+
+	// Properties returns a server's server.properties as a key->value map plus
+	// the keys in file order.
+	Properties func(name string) (map[string]string, []string, error)
+	// SetProperty writes one server.properties key.
+	SetProperty func(name, key, value string) error
+
+	// Backups lists a server's backups, newest first.
+	Backups func(name string) ([]BackupRow, error)
+	// CreateBackup snapshots a server's world data.
+	CreateBackup func(name string) error
+	// RestoreBackup replaces a server's world data with the named backup
+	// ("latest" or a specific ID).
+	RestoreBackup func(name, id string) error
 }
 
 // RunDashboard shows the dashboard and reports what to do next.
@@ -82,6 +111,20 @@ func RunDashboard(deps DashboardDeps) (Outcome, error) {
 	return m.outcome, m.err
 }
 
+// mode selects which screen the dashboard is currently showing. modeList is
+// the default; the rest are entered from it and always return to it or to
+// the screen that opened them.
+type mode int
+
+const (
+	modeList mode = iota
+	modeEdit
+	modeProperties
+	modePropertyEdit
+	modeBackups
+	modeConfirmRestore
+)
+
 type dashboardModel struct {
 	deps    DashboardDeps
 	rows    []ServerRow
@@ -101,6 +144,26 @@ type dashboardModel struct {
 	// not need the whole terminal.
 	confirming bool
 
+	mode mode
+
+	// edit sub-mode: memory/port text inputs, built fresh each time "e" is
+	// pressed so they always start from the row currently selected.
+	editMemory textinput.Model
+	editPort   textinput.Model
+	editOnPort bool // which field has focus
+	editErr    string
+
+	// properties sub-mode: a picker over the current keys, plus a text input
+	// for editing whichever one is selected.
+	propsPicker    picker
+	propKey        string
+	propValueInput textinput.Model
+
+	// backups sub-mode: a picker over the server's snapshots.
+	backupsPicker picker
+	backupRows    []BackupRow
+	restoreID     string
+
 	width, height int
 	outcome       Outcome
 	err           error
@@ -112,6 +175,25 @@ type rowsMsg struct {
 }
 type actionDoneMsg struct {
 	verb string
+	name string
+	err  error
+}
+type propsLoadedMsg struct {
+	name  string
+	props map[string]string
+	order []string
+	err   error
+}
+type propSetMsg struct {
+	name, key string
+	err       error
+}
+type backupsLoadedMsg struct {
+	name string
+	rows []BackupRow
+	err  error
+}
+type backupCreatedMsg struct {
 	name string
 	err  error
 }
@@ -144,6 +226,20 @@ func (m dashboardModel) runAction(verb, name string, fn func(string) error) tea.
 func (m dashboardModel) runRemove(name string, purge bool) tea.Cmd {
 	return func() tea.Msg {
 		return actionDoneMsg{verb: "removed", name: name, err: m.deps.Remove(name, purge)}
+	}
+}
+
+func (m dashboardModel) loadProperties(name string) tea.Cmd {
+	return func() tea.Msg {
+		props, order, err := m.deps.Properties(name)
+		return propsLoadedMsg{name: name, props: props, order: order, err: err}
+	}
+}
+
+func (m dashboardModel) loadBackups(name string) tea.Cmd {
+	return func() tea.Msg {
+		rows, err := m.deps.Backups(name)
+		return backupsLoadedMsg{name: name, rows: rows, err: err}
 	}
 }
 
@@ -181,6 +277,54 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refresh()
 
+	case propsLoadedMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			m.mode = modeList
+			return m, nil
+		}
+		items := make([]Item, len(msg.order))
+		for i, k := range msg.order {
+			items[i] = Item{Title: k, Desc: msg.props[k]}
+		}
+		m.propsPicker = newPicker(items, 12, true)
+		return m, nil
+
+	case propSetMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			m.mode = modeList
+			return m, nil
+		}
+		m.status = "set " + msg.key
+		return m, m.loadProperties(msg.name)
+
+	case backupsLoadedMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			m.mode = modeList
+			return m, nil
+		}
+		m.backupRows = msg.rows
+		items := make([]Item, len(msg.rows))
+		for i, r := range msg.rows {
+			items[i] = Item{Title: r.ID, Desc: ui.Bytes(r.SizeBytes) + "  " + r.CreatedAt.Format(time.RFC822)}
+		}
+		m.backupsPicker = newPicker(items, 10, false)
+		return m, nil
+
+	case backupCreatedMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.failure = msg.err.Error()
+			return m, nil
+		}
+		m.status = "backed up " + msg.name
+		return m, m.loadBackups(msg.name)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -193,11 +337,25 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.busy != "" {
 		return m, nil
 	}
+	m.status, m.failure = "", ""
+
 	if m.confirming {
 		return m.handleConfirmKey(msg)
 	}
 
-	m.status, m.failure = "", ""
+	switch m.mode {
+	case modeEdit:
+		return m.handleEditKey(msg)
+	case modeProperties:
+		return m.handlePropertiesKey(msg)
+	case modePropertyEdit:
+		return m.handlePropertyEditKey(msg)
+	case modeBackups:
+		return m.handleBackupsKey(msg)
+	case modeConfirmRestore:
+		return m.handleConfirmRestoreKey(msg)
+	}
+
 	current, hasCurrent := m.current()
 
 	switch msg.String() {
@@ -270,8 +428,52 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.confirming = true
+
+	case "e":
+		if !hasCurrent {
+			break
+		}
+		m.mode = modeEdit
+		m.editErr = ""
+		m.editOnPort = false
+		m.editMemory = newDashboardInput("e.g. 4G (blank for default)")
+		m.editMemory.SetValue(current.Memory)
+		m.editMemory.CursorEnd()
+		m.editMemory.Focus()
+		m.editPort = newDashboardInput("e.g. 25565")
+		if current.Port != 0 {
+			m.editPort.SetValue(strconv.Itoa(current.Port))
+		}
+		m.editPort.CursorEnd()
+		return m, textinput.Blink
+
+	case "p":
+		if !hasCurrent {
+			break
+		}
+		m.mode = modeProperties
+		m.busy = "loading " + current.Name + "'s properties"
+		return m, m.loadProperties(current.Name)
+
+	case "b":
+		if !hasCurrent {
+			break
+		}
+		m.mode = modeBackups
+		m.busy = "loading " + current.Name + "'s backups"
+		return m, m.loadBackups(current.Name)
 	}
 	return m, nil
+}
+
+// newDashboardInput builds a textinput.Model styled like the create wizard's,
+// so the dashboard's own text entry points look consistent with it.
+func newDashboardInput(placeholder string) textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = placeholder
+	ti.Prompt = ui.Running.Render(ui.GlyphPrompt + " ")
+	ti.CharLimit = 64
+	return ti
 }
 
 // handleConfirmKey asks which of the two remove modes the user means, then
@@ -301,6 +503,167 @@ func (m dashboardModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleEditKey drives the memory/port form opened by "e".
+func (m dashboardModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode = modeList
+		return m, nil
+
+	case tea.KeyTab, tea.KeyShiftTab, tea.KeyDown, tea.KeyUp:
+		m.editOnPort = !m.editOnPort
+		if m.editOnPort {
+			m.editMemory.Blur()
+			m.editPort.Focus()
+		} else {
+			m.editPort.Blur()
+			m.editMemory.Focus()
+		}
+		return m, textinput.Blink
+
+	case tea.KeyEnter:
+		if !m.editOnPort {
+			m.editOnPort = true
+			m.editMemory.Blur()
+			m.editPort.Focus()
+			return m, textinput.Blink
+		}
+		current, hasCurrent := m.current()
+		if !hasCurrent {
+			m.mode = modeList
+			return m, nil
+		}
+		port := 0
+		if s := strings.TrimSpace(m.editPort.Value()); s != "" {
+			p, err := strconv.Atoi(s)
+			if err != nil {
+				m.editErr = "port must be a number"
+				return m, nil
+			}
+			port = p
+		}
+		memory := m.editMemory.Value()
+		name := current.Name
+		m.mode = modeList
+		m.busy = "updating " + name
+		return m, func() tea.Msg {
+			return actionDoneMsg{verb: "updated", name: name, err: m.deps.Edit(name, memory, port)}
+		}
+	}
+
+	var cmd tea.Cmd
+	if m.editOnPort {
+		m.editPort, cmd = m.editPort.Update(msg)
+	} else {
+		m.editMemory, cmd = m.editMemory.Update(msg)
+	}
+	return m, cmd
+}
+
+// handlePropertiesKey drives the server.properties picker opened by "p".
+func (m dashboardModel) handlePropertiesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyEsc {
+		m.mode = modeList
+		return m, nil
+	}
+	if msg.Type == tea.KeyEnter {
+		item, ok := m.propsPicker.selected()
+		if !ok {
+			return m, nil
+		}
+		m.mode = modePropertyEdit
+		m.propKey = item.Title
+		m.propValueInput = newDashboardInput("")
+		m.propValueInput.SetValue(item.Desc)
+		m.propValueInput.CursorEnd()
+		m.propValueInput.Focus()
+		return m, textinput.Blink
+	}
+	m.propsPicker.update(msg)
+	return m, nil
+}
+
+// handlePropertyEditKey drives the text input for the property Enter opened.
+func (m dashboardModel) handlePropertyEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode = modeProperties
+		return m, nil
+	case tea.KeyEnter:
+		current, hasCurrent := m.current()
+		if !hasCurrent {
+			m.mode = modeList
+			return m, nil
+		}
+		name, key, value := current.Name, m.propKey, m.propValueInput.Value()
+		m.mode = modeProperties
+		m.busy = "setting " + key
+		return m, func() tea.Msg {
+			return propSetMsg{name: name, key: key, err: m.deps.SetProperty(name, key, value)}
+		}
+	}
+	var cmd tea.Cmd
+	m.propValueInput, cmd = m.propValueInput.Update(msg)
+	return m, cmd
+}
+
+// handleBackupsKey drives the backups picker opened by "b".
+func (m dashboardModel) handleBackupsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	current, hasCurrent := m.current()
+	switch msg.String() {
+	case "esc":
+		m.mode = modeList
+		return m, nil
+	case "c":
+		if !hasCurrent {
+			return m, nil
+		}
+		name := current.Name
+		m.busy = "backing up " + name
+		return m, func() tea.Msg {
+			return backupCreatedMsg{name: name, err: m.deps.CreateBackup(name)}
+		}
+	case "r", "enter":
+		item, ok := m.backupsPicker.selected()
+		if !ok {
+			return m, nil
+		}
+		m.mode = modeConfirmRestore
+		m.restoreID = item.Title
+		return m, nil
+	}
+	m.backupsPicker.update(msg)
+	return m, nil
+}
+
+// handleConfirmRestoreKey is the single-key confirmation before a restore
+// overwrites the server's current world data, matching the same "choosing an
+// option is the confirmation" pattern the remove flow uses.
+func (m dashboardModel) handleConfirmRestoreKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	current, hasCurrent := m.current()
+	switch msg.String() {
+	case "y":
+		if !hasCurrent {
+			m.mode = modeBackups
+			return m, nil
+		}
+		if current.Running {
+			m.failure = current.Name + " is running — stop it first"
+			m.mode = modeBackups
+			return m, nil
+		}
+		name, id := current.Name, m.restoreID
+		m.mode = modeList
+		m.busy = "restoring " + name
+		return m, func() tea.Msg {
+			return actionDoneMsg{verb: "restored", name: name, err: m.deps.RestoreBackup(name, id)}
+		}
+	case "esc", "n", "ctrl+c":
+		m.mode = modeBackups
+	}
+	return m, nil
+}
+
 func (m dashboardModel) current() (ServerRow, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		return ServerRow{}, false
@@ -313,11 +676,34 @@ func (m dashboardModel) View() string {
 	b.WriteString("\n " + ui.Title.Render("svrctl") + "  " +
 		ui.Subtle.Render(fmt.Sprintf("%d server%s", len(m.rows), plural(len(m.rows)))) + "\n\n")
 
-	if len(m.rows) == 0 {
+	if len(m.rows) == 0 && m.mode == modeList {
 		b.WriteString(" " + ui.Body.Render("No servers yet.") + "\n")
 		b.WriteString(" " + ui.Subtle.Render("Press ") + ui.Key.Render("n") +
 			ui.Subtle.Render(" to set one up.") + "\n")
 		b.WriteString("\n " + ui.HelpBar("n", "new server", "q", "quit") + "\n")
+		return b.String()
+	}
+
+	if m.busy != "" {
+		b.WriteString(" " + m.spinner.View() + ui.Subtle.Render(" "+m.busy) + "\n")
+		return b.String()
+	}
+
+	switch m.mode {
+	case modeEdit:
+		b.WriteString(m.editView())
+		return b.String()
+	case modeProperties:
+		b.WriteString(m.propertiesView())
+		return b.String()
+	case modePropertyEdit:
+		b.WriteString(m.propertyEditView())
+		return b.String()
+	case modeBackups:
+		b.WriteString(m.backupsView())
+		return b.String()
+	case modeConfirmRestore:
+		b.WriteString(m.confirmRestoreView())
 		return b.String()
 	}
 
@@ -330,8 +716,6 @@ func (m dashboardModel) View() string {
 	}
 
 	switch {
-	case m.busy != "":
-		b.WriteString(" " + m.spinner.View() + ui.Subtle.Render(" "+m.busy) + "\n")
 	case m.failure != "":
 		b.WriteString(" " + ui.Failure.Render(ui.GlyphFail+" "+m.failure) + "\n")
 	case m.status != "":
@@ -347,6 +731,9 @@ func (m dashboardModel) View() string {
 		"r", "restart",
 		"c", "console",
 		"l", "logs",
+		"e", "edit",
+		"p", "properties",
+		"b", "backups",
 		"d", "remove",
 		"n", "new",
 		"q", "quit",
@@ -369,20 +756,89 @@ func (m dashboardModel) confirmView() string {
 	return b.String()
 }
 
+// editView shows the memory/port form opened by "e".
+func (m dashboardModel) editView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Body.Render("Edit "+current.Name) + "\n\n")
+	b.WriteString(" " + ui.Subtle.Render("Memory") + "\n")
+	b.WriteString(" " + m.editMemory.View() + "\n\n")
+	b.WriteString(" " + ui.Subtle.Render("Port") + "\n")
+	b.WriteString(" " + m.editPort.View() + "\n")
+	if m.editErr != "" {
+		b.WriteString("\n " + ui.Failure.Render(ui.GlyphFail+" "+m.editErr) + "\n")
+	}
+	b.WriteString("\n " + ui.HelpBar("tab", "switch field", "enter", "save", "esc", "cancel") + "\n")
+	return b.String()
+}
+
+// propertiesView shows the server.properties picker opened by "p".
+func (m dashboardModel) propertiesView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Body.Render(current.Name+"'s server.properties") + "\n\n")
+	b.WriteString(m.propsPicker.view(m.width))
+	b.WriteString("\n " + ui.HelpBar("↑↓", "select", "type", "filter", "enter", "edit value", "esc", "back") + "\n")
+	return b.String()
+}
+
+// propertyEditView shows the text input for the property Enter opened.
+func (m dashboardModel) propertyEditView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Body.Render(current.Name+" — "+m.propKey) + "\n\n")
+	b.WriteString(" " + m.propValueInput.View() + "\n")
+	b.WriteString("\n " + ui.HelpBar("enter", "save", "esc", "cancel") + "\n")
+	return b.String()
+}
+
+// backupsView shows the backups picker opened by "b".
+func (m dashboardModel) backupsView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Body.Render(current.Name+"'s backups") + "\n\n")
+	if len(m.backupRows) == 0 {
+		b.WriteString(" " + ui.Subtle.Render("No backups yet.") + "\n")
+	} else {
+		b.WriteString(m.backupsPicker.view(m.width))
+	}
+	b.WriteString("\n " + ui.HelpBar("↑↓", "select", "c", "create", "enter", "restore", "esc", "back") + "\n")
+	return b.String()
+}
+
+// confirmRestoreView is the single-key confirmation before a restore
+// overwrites the server's current world data.
+func (m dashboardModel) confirmRestoreView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Warning.Render("Restore "+current.Name+" from "+m.restoreID+"?") + "\n")
+	b.WriteString(" " + ui.Subtle.Render("Anything played since that backup was taken is gone.") + "\n")
+	b.WriteString("\n " + ui.HelpBar("y", "restore", "esc", "cancel") + "\n")
+	return b.String()
+}
+
 // table lays the servers out in fixed columns sized to the content, so the
 // status column stays put as servers come up and down.
 func (m dashboardModel) table() string {
-	nameW, typeW, verW := 4, 4, 7
+	nameW, typeW, verW, groupW := 4, 4, 7, 5
+	showGroup := false
 	for _, r := range m.rows {
 		nameW = max(nameW, ui.TextWidth(r.Name))
 		typeW = max(typeW, ui.TextWidth(r.Type))
 		verW = max(verW, ui.TextWidth(r.Version))
+		if r.Group != "" {
+			showGroup = true
+			groupW = max(groupW, ui.TextWidth(r.Group))
+		}
 	}
 
 	var b strings.Builder
-	b.WriteString("  " + ui.Header.Render(
-		ui.Pad("NAME", nameW+2)+ui.Pad("TYPE", typeW+2)+
-			ui.Pad("VERSION", verW+2)+ui.Pad("STATUS", 12)+"UPTIME") + "\n")
+	header := ui.Pad("NAME", nameW+2) + ui.Pad("TYPE", typeW+2) + ui.Pad("VERSION", verW+2)
+	if showGroup {
+		header += ui.Pad("GROUP", groupW+2)
+	}
+	header += ui.Pad("STATUS", 12) + "UPTIME"
+	b.WriteString("  " + ui.Header.Render(header) + "\n")
 
 	for i, r := range m.rows {
 		marker := "  "
@@ -397,11 +853,14 @@ func (m dashboardModel) table() string {
 			uptime = ui.Body.Render(ui.Duration(r.Uptime))
 		}
 
-		b.WriteString(marker + name +
+		line := marker + name +
 			ui.Subtle.Render(ui.Pad(r.Type, typeW+2)) +
-			ui.Subtle.Render(ui.Pad(r.Version, verW+2)) +
-			ui.PadStyled(ui.StatusGlyph(r.Running), 12) +
-			uptime + "\n")
+			ui.Subtle.Render(ui.Pad(r.Version, verW+2))
+		if showGroup {
+			line += ui.Subtle.Render(ui.Pad(r.Group, groupW+2))
+		}
+		line += ui.PadStyled(ui.StatusGlyph(r.Running), 12) + uptime
+		b.WriteString(line + "\n")
 	}
 	return b.String()
 }

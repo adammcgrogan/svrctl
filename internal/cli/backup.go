@@ -42,47 +42,19 @@ func newBackupCreateCmd() *cobra.Command {
 		ValidArgsFunction: completeServerNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			s, err := resolveServer(name)
-			if err != nil {
-				return err
-			}
 			out := cmd.OutOrStdout()
 
-			worldDirs, err := worldDirectories(s.Path)
-			if err != nil {
-				return err
-			}
-			if len(worldDirs) == 0 {
-				return fmt.Errorf("%q has no world data yet — start it at least once first", name)
-			}
-
-			backupsDir, err := paths.BackupsDir(name)
-			if err != nil {
-				return err
-			}
-			backupPath := filepath.Join(backupsDir, time.Now().Format(backupTimeFormat)+".tar.gz")
-
-			running := false
-			if _, ok := process.IsRunning(s.Path); ok {
-				running = true
+			flushed := false
+			info, err := createServerBackup(name, func() {
+				flushed = true
 				ui.Stepf(out, "Flushing world data before snapshotting…")
-				if err := prepareLiveBackup(s.Path); err != nil {
-					return err
-				}
-				defer process.SendCommand(s.Path, "save-on")
-			}
-
-			if err := createWorldArchive(backupPath, s.Path, worldDirs); err != nil {
-				os.Remove(backupPath)
-				return err
-			}
-
-			info, err := os.Stat(backupPath)
+			})
 			if err != nil {
 				return err
 			}
-			ui.Okf(out, "Backed up %s (%s)", ui.Strong.Render(name), ui.Bytes(info.Size()))
-			if running {
+
+			ui.Okf(out, "Backed up %s (%s)", ui.Strong.Render(name), ui.Bytes(info.SizeBytes))
+			if flushed {
 				ui.Hintf(out, "svrctl backup list %s", name)
 			}
 			return nil
@@ -144,18 +116,16 @@ func newBackupRestoreCmd() *cobra.Command {
 		ValidArgsFunction: completeServerNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, id := args[0], args[1]
+			out := cmd.OutOrStdout()
+
 			s, err := resolveServer(name)
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-
 			if _, ok := process.IsRunning(s.Path); ok {
 				return fmt.Errorf("%q is running — stop it first with `svrctl stop %s`", name, name)
 			}
-
-			backupPath, resolvedID, err := resolveBackup(name, id)
-			if err != nil {
+			if _, _, err := resolveBackup(name, id); err != nil {
 				return err
 			}
 
@@ -168,16 +138,8 @@ func newBackupRestoreCmd() *cobra.Command {
 				}
 			}
 
-			worldDirs, err := worldDirectories(s.Path)
+			resolvedID, err := restoreServerBackup(name, id)
 			if err != nil {
-				return err
-			}
-			for _, dir := range worldDirs {
-				if err := os.RemoveAll(filepath.Join(s.Path, dir)); err != nil {
-					return fmt.Errorf("clearing current world data: %w", err)
-				}
-			}
-			if err := extractWorldArchive(backupPath, s.Path); err != nil {
 				return err
 			}
 
@@ -187,6 +149,36 @@ func newBackupRestoreCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the confirmation prompt")
 	return cmd
+}
+
+// restoreServerBackup replaces name's current world data with the backup
+// identified by id ("latest" or a specific ID), shared by the `backup
+// restore` command and the dashboard's backups sub-mode. Callers are
+// responsible for confirming with the user and checking the server is
+// stopped before calling this — it does neither itself.
+func restoreServerBackup(name, id string) (resolvedID string, err error) {
+	s, err := resolveServer(name)
+	if err != nil {
+		return "", err
+	}
+	backupPath, resolvedID, err := resolveBackup(name, id)
+	if err != nil {
+		return "", err
+	}
+
+	worldDirs, err := worldDirectories(s.Path)
+	if err != nil {
+		return "", err
+	}
+	for _, dir := range worldDirs {
+		if err := os.RemoveAll(filepath.Join(s.Path, dir)); err != nil {
+			return "", fmt.Errorf("clearing current world data: %w", err)
+		}
+	}
+	if err := extractWorldArchive(backupPath, s.Path); err != nil {
+		return "", err
+	}
+	return resolvedID, nil
 }
 
 // confirmRestore requires the user to type the server's name before its
@@ -203,6 +195,54 @@ func confirmRestore(in io.Reader, out io.Writer, name string) error {
 		return fmt.Errorf("names did not match, so nothing was restored")
 	}
 	return nil
+}
+
+// createServerBackup snapshots name's world data into a new timestamped
+// archive, shared by the `backup create` command and the dashboard's backups
+// sub-mode. If the server is running, onFlush (which may be nil) is called
+// right before autosave is paused and the data flushed, so a caller can
+// report that the operation is briefly touching a live server.
+func createServerBackup(name string, onFlush func()) (backupInfo, error) {
+	s, err := resolveServer(name)
+	if err != nil {
+		return backupInfo{}, err
+	}
+
+	worldDirs, err := worldDirectories(s.Path)
+	if err != nil {
+		return backupInfo{}, err
+	}
+	if len(worldDirs) == 0 {
+		return backupInfo{}, fmt.Errorf("%q has no world data yet — start it at least once first", name)
+	}
+
+	backupsDir, err := paths.BackupsDir(name)
+	if err != nil {
+		return backupInfo{}, err
+	}
+	id := time.Now().Format(backupTimeFormat)
+	backupPath := filepath.Join(backupsDir, id+".tar.gz")
+
+	if _, ok := process.IsRunning(s.Path); ok {
+		if onFlush != nil {
+			onFlush()
+		}
+		if err := prepareLiveBackup(s.Path); err != nil {
+			return backupInfo{}, err
+		}
+		defer process.SendCommand(s.Path, "save-on")
+	}
+
+	if err := createWorldArchive(backupPath, s.Path, worldDirs); err != nil {
+		os.Remove(backupPath)
+		return backupInfo{}, err
+	}
+
+	info, err := os.Stat(backupPath)
+	if err != nil {
+		return backupInfo{}, err
+	}
+	return backupInfo{ID: id, CreatedAt: time.Now(), SizeBytes: info.Size(), backupPath: backupPath}, nil
 }
 
 // prepareLiveBackup asks a running server to flush its world data and pause
