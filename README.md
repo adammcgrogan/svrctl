@@ -54,6 +54,8 @@ server name, to act on every server tagged with `svrctl create --group`/`svrctl 
 | `svrctl logs <name>` | Show recent output (`-f` to follow, `-n` for how much) |
 | `svrctl versions` | List Minecraft versions you can pass to `create --version` |
 | `svrctl edit <name>` | Change a server's memory or port after creation |
+| `svrctl properties <name> [key] [value]` | List, get, or set `server.properties` settings |
+| `svrctl backup create/list/restore <name>` | Snapshot and restore a server's world data |
 | `svrctl remove <name>` | Unregister a server (`--purge` to also delete its files) |
 
 Every command takes `--json` where a machine might read the output, and

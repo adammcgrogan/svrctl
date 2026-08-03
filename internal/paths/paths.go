@@ -45,6 +45,22 @@ func CacheDir() (string, error) {
 	return dir, nil
 }
 
+// BackupsDir returns the directory holding a server's world backups,
+// creating it if needed. Backups live alongside the registry rather than in
+// the server's own directory so `svrctl remove --purge` deleting that
+// directory doesn't take every backup down with it.
+func BackupsDir(serverName string) (string, error) {
+	base, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(base, "backups", serverName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 // JDKDir returns the cache directory for a specific JDK major version, creating it if needed.
 func JDKDir(major int) (string, error) {
 	base, err := CacheDir()

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/adammcgrogan/svrctl/internal/fetch"
@@ -229,38 +230,5 @@ func Provision(spec ProvisionSpec, hooks ProvisionHooks) (registry.Server, error
 // writeServerPort sets server-port in server.properties, preserving any other
 // settings already there rather than truncating the file.
 func writeServerPort(serverDir string, port int) error {
-	propsPath := filepath.Join(serverDir, "server.properties")
-	line := fmt.Sprintf("server-port=%d", port)
-
-	existing, err := os.ReadFile(propsPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("reading server.properties: %w", err)
-		}
-		if err := os.WriteFile(propsPath, []byte(line+"\n"), 0o644); err != nil {
-			return fmt.Errorf("writing server.properties: %w", err)
-		}
-		return nil
-	}
-
-	lines := strings.Split(string(existing), "\n")
-	replaced := false
-	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), "server-port=") {
-			lines[i] = line
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		lines = append(lines, line)
-	}
-	out := strings.Join(lines, "\n")
-	if !strings.HasSuffix(out, "\n") {
-		out += "\n"
-	}
-	if err := os.WriteFile(propsPath, []byte(out), 0o644); err != nil {
-		return fmt.Errorf("writing server.properties: %w", err)
-	}
-	return nil
+	return setProperty(filepath.Join(serverDir, "server.properties"), "server-port", strconv.Itoa(port))
 }
