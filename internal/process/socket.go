@@ -5,10 +5,19 @@ package process
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"io"
 	"net"
 	"strings"
 )
+
+// tokenMatches compares a client-supplied token against the server's in
+// constant time, so a rejected handshake takes the same time however many
+// leading bytes the guess got right. Tokens are fixed-length hex from
+// crypto/rand, so the length difference this still reveals is not a secret.
+func tokenMatches(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
 
 // handleConn implements the control-socket protocol. The first line must be:
 //
@@ -26,7 +35,7 @@ func handleConn(conn net.Conn, b *broadcaster, token string) {
 		return
 	}
 	fields := strings.SplitN(strings.TrimRight(authLine, "\r\n"), " ", 4)
-	if len(fields) < 3 || fields[0] != "AUTH" || fields[1] != token {
+	if len(fields) < 3 || fields[0] != "AUTH" || !tokenMatches(fields[1], token) {
 		conn.Write([]byte("ERR bad auth\n"))
 		return
 	}
