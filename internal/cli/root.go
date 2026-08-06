@@ -32,7 +32,12 @@ func NewRoot() *cobra.Command {
 			"  svrctl console survival   attach to its console",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Args:          cobra.NoArgs,
+		// Deliberately no Args. Cobra only builds the "Did you mean this?"
+		// suggestion for an unknown command when the root command leaves Args
+		// unset; anything else (cobra.NoArgs included) short-circuits to a bare
+		// "unknown command" with no help. Cobra's own default already rejects
+		// stray arguments on a root command that has subcommands, so this is
+		// NoArgs plus the suggestion, not a loosening.
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			ui.SetPlain(plain)
 		},
