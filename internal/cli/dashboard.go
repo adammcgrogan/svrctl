@@ -21,8 +21,17 @@ func dashboardDeps() tui.DashboardDeps {
 		Restart: func(name string) error { return restartServer(io.Discard, name) },
 		Remove:  removeServer,
 
+		// A blank port field arrives as zero, meaning "leave the port alone" —
+		// the dashboard's equivalent of `svrctl edit` without --port, which
+		// builds its pointer from Flags().Changed. Passing &port regardless
+		// would write server-port=0 and bind the server to a random port.
+		// Memory is deliberately unconditional: a blank field there clears it.
 		Edit: func(name, memory string, port int) error {
-			_, err := editServer(name, &memory, nil, &port)
+			var portPtr *int
+			if port != 0 {
+				portPtr = &port
+			}
+			_, err := editServer(name, &memory, nil, portPtr)
 			return err
 		},
 

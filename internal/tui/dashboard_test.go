@@ -433,6 +433,39 @@ func TestDashboardEditSubmitsMemoryAndPort(t *testing.T) {
 	}
 }
 
+func TestDashboardEditWithBlankPortReportsZero(t *testing.T) {
+	// Zero is the documented "leave the port alone" signal on DashboardDeps.Edit,
+	// so a cleared field must report it rather than a parsed value.
+	var gotPort int
+	called := false
+	deps := DashboardDeps{
+		List: func() ([]ServerRow, error) { return testRows(), nil },
+		Edit: func(name, memory string, port int) error {
+			gotPort, called = port, true
+			return nil
+		},
+	}
+
+	m := press(newTestDashboard(deps), "enter", "e", "tab",
+		"backspace", "backspace", "backspace", "backspace", "backspace")
+	if m.editPort.Value() != "" {
+		t.Fatalf("port field is %q, want it cleared", m.editPort.Value())
+	}
+
+	_, cmd := m.Update(key("enter"))
+	if cmd == nil {
+		t.Fatal("expected a command to run the edit")
+	}
+	cmd()
+
+	if !called {
+		t.Fatal("Edit was never called")
+	}
+	if gotPort != 0 {
+		t.Errorf("got port %d, want 0 for a blank field", gotPort)
+	}
+}
+
 func TestDashboardEditRejectsNonNumericPort(t *testing.T) {
 	m := press(newTestDashboard(DashboardDeps{}), "enter", "e", "tab",
 		"backspace", "backspace", "backspace", "backspace", "backspace", "abc")
