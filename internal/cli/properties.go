@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -131,10 +132,51 @@ func readProperties(path string) (map[string]string, []string, error) {
 	return props, order, nil
 }
 
+// validatePropertyKey rejects keys that would not read back as themselves.
+// server.properties has no quoting we produce or interpret, so a key carrying
+// a separator or a comment marker would parse as a different setting — or as
+// no setting at all — the next time the file is read.
+func validatePropertyKey(key string) error {
+	switch {
+	case key == "":
+		return fmt.Errorf("property name cannot be empty")
+	case strings.ContainsAny(key, "=:"):
+		return fmt.Errorf("property name cannot contain %q or %q", "=", ":")
+	case strings.HasPrefix(key, "#"), strings.HasPrefix(key, "!"):
+		return fmt.Errorf("property name cannot start with %q or %q, which mark a comment", "#", "!")
+	case strings.ContainsFunc(key, unicode.IsSpace):
+		return fmt.Errorf("property name cannot contain whitespace")
+	case strings.ContainsFunc(key, isControl):
+		return fmt.Errorf("property name cannot contain control characters")
+	}
+	return nil
+}
+
+// validatePropertyValue rejects values that would not stay on their own line.
+// A newline is the dangerous one: written verbatim it ends the setting and
+// starts another, so setting one key would quietly write others.
+func validatePropertyValue(value string) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("property value cannot contain line breaks")
+	}
+	if strings.ContainsFunc(value, isControl) {
+		return fmt.Errorf("property value cannot contain control characters")
+	}
+	return nil
+}
+
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
+
 // setProperty writes key=value into server.properties, replacing an existing
 // line for that key in place or appending a new one, and leaving every other
 // line — including comments — untouched.
 func setProperty(propsPath, key, value string) error {
+	if err := validatePropertyKey(key); err != nil {
+		return err
+	}
+	if err := validatePropertyValue(value); err != nil {
+		return err
+	}
 	line := key + "=" + value
 
 	existing, err := os.ReadFile(propsPath)
