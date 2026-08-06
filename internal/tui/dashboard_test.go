@@ -778,7 +778,10 @@ func TestDashboardPluginsUpdateAndRemove(t *testing.T) {
 		t.Errorf("got status %q, want it to mention luckperms", m.status)
 	}
 
-	next, cmd = m.Update(key("d"))
+	// "d" asks first; "y" is what actually removes it.
+	next, _ = m.Update(key("d"))
+	m = next.(dashboardModel)
+	next, cmd = m.Update(key("y"))
 	m = next.(dashboardModel)
 	if cmd == nil {
 		t.Fatal("expected a command to remove the selected plugin")
@@ -787,5 +790,58 @@ func TestDashboardPluginsUpdateAndRemove(t *testing.T) {
 	m = next.(dashboardModel)
 	if removedSlug != "luckperms" {
 		t.Errorf("got RemovePlugin slug %q, want luckperms", removedSlug)
+	}
+	if m.mode != modePlugins {
+		t.Errorf("expected to return to modePlugins after removing, got %v", m.mode)
+	}
+}
+
+func TestDashboardPluginRemoveRequiresConfirmation(t *testing.T) {
+	removed := false
+	deps := DashboardDeps{
+		List: func() ([]ServerRow, error) { return testRows(), nil },
+		Plugins: func(name string) ([]PluginRow, error) {
+			return []PluginRow{{Slug: "luckperms", VersionNumber: "5.4"}}, nil
+		},
+		RemovePlugin: func(name, slug string) error {
+			removed = true
+			return nil
+		},
+	}
+
+	next, cmd := press(newTestDashboard(deps), "down", "enter").Update(key("P"))
+	m := next.(dashboardModel)
+	next, _ = m.Update(cmd())
+	m = next.(dashboardModel)
+
+	// "d" must ask rather than delete.
+	next, cmd = m.Update(key("d"))
+	m = next.(dashboardModel)
+	if m.mode != modeConfirmPluginRemove {
+		t.Fatalf("expected modeConfirmPluginRemove, got %v", m.mode)
+	}
+	if cmd != nil {
+		t.Error("pressing d ran a command instead of asking first")
+	}
+	if removed {
+		t.Fatal("plugin was removed without confirmation")
+	}
+
+	// The prompt has to name what is about to go.
+	view := ui.StripANSI(m.View())
+	for _, want := range []string{"luckperms", "survival", "cancel"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("confirmation missing %q:\n%s", want, view)
+		}
+	}
+
+	// esc backs out without removing.
+	next, _ = m.Update(key("esc"))
+	m = next.(dashboardModel)
+	if m.mode != modePlugins {
+		t.Errorf("expected esc to cancel back to modePlugins, got %v", m.mode)
+	}
+	if removed {
+		t.Error("plugin was removed after cancelling")
 	}
 }

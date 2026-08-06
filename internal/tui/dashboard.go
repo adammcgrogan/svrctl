@@ -159,6 +159,7 @@ const (
 	modePlugins
 	modePluginSearch
 	modePluginResults
+	modeConfirmPluginRemove
 )
 
 type dashboardModel struct {
@@ -207,6 +208,7 @@ type dashboardModel struct {
 	pluginQuery   textinput.Model
 	pluginResults []PluginHit
 	resultsPicker picker
+	removeSlug    string // the plugin awaiting confirmation, as restoreID is for a backup
 
 	width, height int
 	outcome       Outcome
@@ -522,6 +524,8 @@ func (m dashboardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePluginSearchKey(msg)
 	case modePluginResults:
 		return m.handlePluginResultsKey(msg)
+	case modeConfirmPluginRemove:
+		return m.handleConfirmPluginRemoveKey(msg)
 	}
 
 	current, hasCurrent := m.current()
@@ -905,13 +909,34 @@ func (m dashboardModel) handlePluginsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok || !hasCurrent {
 			return m, nil
 		}
-		name, slug := current.Name, item.Title
+		m.mode = modeConfirmPluginRemove
+		m.removeSlug = item.Title
+		return m, nil
+	}
+	m.pluginsPicker.update(msg)
+	return m, nil
+}
+
+// handleConfirmPluginRemoveKey is the single-key confirmation before a plugin
+// is deleted, matching the same pattern the remove and restore flows use: "d"
+// is one keystroke away from the cursor keys, so it must not delete on its own.
+func (m dashboardModel) handleConfirmPluginRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	current, hasCurrent := m.current()
+	switch msg.String() {
+	case "y":
+		if !hasCurrent {
+			m.mode = modePlugins
+			return m, nil
+		}
+		name, slug := current.Name, m.removeSlug
+		m.mode = modePlugins
 		m.busy = "removing " + slug
 		return m, func() tea.Msg {
 			return pluginRemovedMsg{name: name, slug: slug, err: m.deps.RemovePlugin(name, slug)}
 		}
+	case "esc", "n", "ctrl+c":
+		m.mode = modePlugins
 	}
-	m.pluginsPicker.update(msg)
 	return m, nil
 }
 
@@ -1010,6 +1035,9 @@ func (m dashboardModel) View() string {
 		return b.String()
 	case modePluginResults:
 		b.WriteString(m.pluginResultsView())
+		return b.String()
+	case modeConfirmPluginRemove:
+		b.WriteString(m.confirmPluginRemoveView())
 		return b.String()
 	}
 
@@ -1183,6 +1211,17 @@ func (m dashboardModel) pluginsView() string {
 		b.WriteString(m.pluginsPicker.view(m.width))
 	}
 	b.WriteString("\n " + ui.HelpBar("↑↓", "select", "i", "install", "u", "update", "d", "remove", "esc", "back") + "\n")
+	return b.String()
+}
+
+// confirmPluginRemoveView is the single-key confirmation before a plugin's
+// jar is deleted.
+func (m dashboardModel) confirmPluginRemoveView() string {
+	current, _ := m.current()
+	var b strings.Builder
+	b.WriteString(" " + ui.Warning.Render("Remove "+m.removeSlug+" from "+current.Name+"?") + "\n")
+	b.WriteString(" " + ui.Subtle.Render("The jar is deleted; any world data the plugin wrote stays behind.") + "\n")
+	b.WriteString("\n " + ui.HelpBar("y", "remove", "esc", "cancel") + "\n")
 	return b.String()
 }
 
